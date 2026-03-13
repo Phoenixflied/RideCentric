@@ -1,0 +1,66 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <title>RideCentric LIVE | Dispatch Command</title>
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link href="https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;600;800&display=swap" rel="stylesheet">
+    <link rel="stylesheet" href="style.css">
+    <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" />
+</head>
+<body>
+    <header class="glass-header">
+        <div class="brand-container">
+            <div class="brand">RideCentric <span>LIVE</span></div>
+            <div class="live-dot"></div>
+        </div>
+        
+        <div class="time-control-center">
+            <div id="clock" class="system-clock">00:00:00</div>
+            <input type="date" id="date-picker" class="white-date-btn">
+            <button class="btn btn-secondary" onclick="fetchAllFlights()" style="font-size: 0.85rem; padding: 12px 15px;">Show All</button>
+            <button id="scan-btn" class="btn" onclick="forceScan()" style="font-size: 0.85rem; padding: 12px 15px; background: var(--success); color: var(--bg-dark);">🔄 Scan Manifests</button>
+        </div>
+        
+        <div class="header-actions">
+            <div class="search-container" style="width: 200px;">
+                <input type="text" id="search-bar" placeholder="Search..." onkeyup="filterSearch()">
+            </div>
+            <button class="btn btn-primary" onclick="openModal('add-flight-modal')">+ Add Flight</button>
+            <button class="btn btn-secondary" onclick="logout()">Logout</button>
+        </div>
+    </header>
+
+    <main class="split-layout">
+        <section class="panel-left" id="data-panel"></section>
+
+        <section class="panel-right">
+            <div id="map-container" style="position: relative; width: 100%; height: 100%;">
+                <div id="map"></div>
+                <div class="rc-map-watermark">RideCentric Map</div>
+            </div>
+        </section>
+    </main>
+
+    <div id="add-flight-modal" class="modal-overlay hidden">
+        <div class="modal-box">
+            <h2 style="color: var(--accent); font-size: 1.8rem; margin-top: 0;">Instant Tracking</h2>
+            <p style="color:var(--muted); font-size:0.9rem; line-height: 1.5; margin-top:-10px;">Enter flight number. System will instantly activate routing.</p>
+            
+            <label style="color: var(--muted); font-size: 0.85rem; font-weight: 800; margin-top: 20px;">FLIGHT NUMBER</label>
+            <input type="text" id="verify-flight-no" placeholder="e.g. AA3502" class="form-input" style="font-size: 1.2rem; padding: 15px;">
+            
+            <div id="verify-status" style="font-size:0.9rem; margin-top:10px; font-weight:bold;"></div>
+            
+            <div class="modal-actions mt-3">
+                <button class="btn btn-secondary" onclick="closeModal('add-flight-modal')" style="width: 45%;">Cancel</button>
+                <button class="btn btn-primary" id="verify-btn" onclick="verifyAndAddFlight()" style="width: 50%;">Verify & Add</button>
+            </div>
+        </div>
+    </div>
+
+    <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
+    <script src="script.js"></script>
+</body>
+</html>

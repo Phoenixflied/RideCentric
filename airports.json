@@ -1,0 +1,11 @@
+{
+    "LRD": {"name": "Laredo Intl", "lat": 27.5437, "lng": -99.4615, "city": "Laredo", "country": "USA"},
+    "DFW": {"name": "Dallas/Fort Worth", "lat": 32.8998, "lng": -97.0403, "city": "Dallas", "country": "USA"},
+    "ORD": {"name": "O'Hare Intl", "lat": 41.9742, "lng": -87.9073, "city": "Chicago", "country": "USA"},
+    "AEX": {"name": "Alexandria Intl", "lat": 31.3274, "lng": -92.5486, "city": "Alexandria", "country": "USA"},
+    "ATL": {"name": "Hartsfield-Jackson", "lat": 33.6407, "lng": -84.4277, "city": "Atlanta", "country": "USA"},
+    "JFK": {"name": "John F. Kennedy", "lat": 40.6413, "lng": -73.7781, "city": "New York", "country": "USA"},
+    "LHR": {"name": "Heathrow", "lat": 51.4700, "lng": -0.4543, "city": "London", "country": "UK"},
+    "DXB": {"name": "Dubai Intl", "lat": 25.2532, "lng": 55.3657, "city": "Dubai", "country": "UAE"},
+    "MEX": {"name": "Mexico City Intl", "lat": 19.4361, "lng": -99.0719, "city": "Mexico City", "country": "Mexico"}
+}

@@ -1,0 +1,74 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <title>RideCentric LIVE | Dispatch Login</title>
+    <link href="https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;600;800&display=swap" rel="stylesheet">
+    <link rel="stylesheet" href="style.css">
+    <style>
+        body { justify-content: center; align-items: center; background: #070a12; }
+        .login-box { 
+            background: rgba(15, 23, 42, 0.85); padding: 40px; border-radius: 15px; 
+            border: 1px solid rgba(255, 255, 255, 0.1); width: 350px; text-align: center; 
+            box-shadow: 0 10px 30px rgba(0,0,0,0.5); backdrop-filter: blur(15px);
+        }
+        .login-box h1 { color: #4977ff; margin-top: 0; font-size: 2rem; letter-spacing: -1px; }
+        .login-box input { 
+            width: 85%; margin-bottom: 15px; padding: 12px; border-radius: 8px; 
+            font-family: 'JetBrains Mono', monospace; background: rgba(0,0,0,0.5); 
+            border: 1px solid rgba(255, 255, 255, 0.1); color: white; outline: none; transition: 0.2s;
+        }
+        .login-box input:focus { border-color: #4977ff; }
+        .login-box button { width: 95%; padding: 12px; font-size: 1rem; margin-top: 10px; }
+        #error-msg { color: #ef4444; font-size: 0.85rem; margin-top: 15px; min-height: 20px; font-weight: 600;}
+    </style>
+</head>
+<body>
+    <div class="login-box">
+        <h1>RideCentric</h1>
+        <p style="color: #94a3b8; margin-bottom: 25px; margin-top: -10px; font-weight: 600;">System Access</p>
+        
+        <input type="text" id="username" placeholder="Username">
+        <input type="password" id="password" placeholder="Password">
+        
+        <button class="btn btn-primary" onclick="attemptLogin()">Login</button>
+        <div id="error-msg"></div>
+    </div>
+
+    <script>
+        // Send user straight to dashboard if they are already logged in
+        if (localStorage.getItem('ridecentric_token')) window.location.href = 'dashboard.html';
+
+        async function attemptLogin() {
+            const u = document.getElementById('username').value;
+            const p = document.getElementById('password').value;
+            const err = document.getElementById('error-msg');
+            err.innerText = "Authenticating...";
+
+            try {
+                // FIXED: Uses 127.0.0.1 to perfectly match the backend terminal
+                const res = await fetch('http://127.0.0.1:8000/login', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ username: u, password: p })
+                });
+
+                if (res.ok) {
+                    const data = await res.json();
+                    localStorage.setItem('ridecentric_token', data.token);
+                    window.location.href = 'dashboard.html';
+                } else {
+                    err.innerText = "✕ Invalid credentials.";
+                }
+            } catch (e) {
+                err.innerText = "✕ System offline. Check backend terminal.";
+            }
+        }
+        
+        // Allow hitting "Enter" to login
+        document.addEventListener("keyup", function(event) {
+            if (event.key === "Enter") attemptLogin();
+        });
+    </script>
+</body>
+</html>
