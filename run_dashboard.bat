@@ -1,4 +1,4 @@
-@echo off
+tr@echo off
 echo ===================================================
 echo [SYSTEM] Starting RideCentric Command Center...
 echo ===================================================
@@ -12,5 +12,5 @@ cd ../frontend
 start "Frontend UI" cmd /k "py -m http.server 5500"
 
 echo [OK] System Live. 
-echo Access: http://localhost:5500/login.html
+echo Access: http://127.0.0.1:8000/login.html
 pause

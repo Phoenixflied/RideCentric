@@ -188,6 +188,8 @@ function pinOnMap(flightData) {
     map.fitBounds(routeLine.getBounds(), { padding:[50,50], maxZoom:6 });
 }
 
+
+
 // ----------------------
 // Flight Delete
 // ----------------------
@@ -196,5 +198,29 @@ async function deleteFlight(id) {
         const targetDate = getFormattedDate() || "ALL";
         await fetch(`/api/flights/${encodeURIComponent(targetDate)}/${id}`, { method: 'DELETE' });
         await fetchFlights();
+    }
+}
+
+
+// ----------------------
+// Force Scan Manifests
+// ----------------------
+async function forceScan() {
+    const statusEl = document.getElementById("scan-status");
+    statusEl.innerText = "Scanning manifests...";
+
+    try {
+        const res = await fetch("http://127.0.0.1:8000/api/scan_manifests", { method: "POST" });
+        const data = await res.json();
+
+        if (data.status === "ok") {
+            statusEl.innerText = `✅ Scan complete! Found ${data.flights_found} flights.`;
+            await fetchFlights(); // refresh dashboard flights
+        } else {
+            statusEl.innerText = `❌ ${data.message}`;
+        }
+    } catch (e) {
+        statusEl.innerText = "❌ Error scanning manifests. Backend offline?";
+        console.error(e);
     }
 }
