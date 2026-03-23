@@ -9,14 +9,12 @@
 }
 
 body {
-    margin: 0; 
-    font-family: 'JetBrains Mono', monospace; 
-    background: var(--bg-dark); 
-    color: var(--text); 
-    height: 100vh; 
-    display: flex; 
-    flex-direction: column; 
-    overflow: hidden;
+    margin: 0;
+    font-family: 'JetBrains Mono', monospace;
+    background: var(--bg-dark);
+    color: var(--text);
+    height: 100vh;
+    overflow: hidden; /* keep this */
 }
 
 .glass-header {
@@ -58,10 +56,26 @@ body {
 .btn-secondary { background: rgba(255,255,255,0.1); color: white; }
 .btn:hover { filter: brightness(1.2); transform: translateY(-1px); }
 
-.split-layout { display: flex; flex: 1; height: calc(100vh - 85px); position: relative; z-index: 1; }
-.panel-left { width: 60%; overflow-y: auto; padding: 30px; display: flex; flex-direction: column; gap: 20px; z-index: 2; }
-.panel-right { width: 40%; border-left: 1px solid var(--border); position: relative; z-index: 1; }
-#map { width: 100%; height: 100%; background: #0b1120; z-index: 1; }
+.split-layout {
+    display: flex;
+    height: calc(100vh - 85px); /* header height */
+}
+.panel-left {
+    width: 60%;
+    height: 100%;
+    overflow-y: auto;
+    padding: 30px;
+
+    /* ADD THIS 👇 */
+    min-height: 0;
+}       /* IMPORTANT: remove flex */
+
+
+.panel-right {
+    width: 40%;
+    height: 100%;
+}#map { width: 100%; height: 100%; background: #0b1120; z-index: 1; }
+
 
 .station-block { background: rgba(255,255,255,0.02); border: 1px solid var(--border); border-radius: 14px; overflow: hidden; box-shadow: 0 10px 30px rgba(0,0,0,0.2); }
 .station-header { background: rgba(0,0,0,0.4); padding: 16px 24px; display: flex; justify-content: space-between; align-items: center; border-bottom: 1px solid var(--border); }

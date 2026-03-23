@@ -1,226 +1,131 @@
-// ----------------------
-// Authentication
-// ----------------------
-if (!localStorage.getItem('ridecentric_token')) {
-    window.location.href = 'login.html';
-}
+const API_BASE = window.location.origin;
 
-function logout() {
-    localStorage.removeItem('ridecentric_token');
-    window.location.href = 'login.html';
-}
-
-// ----------------------
-// Map & Flight Data
-// ----------------------
-let map;
-let allData = {};
-let activeRouteLayers = [];
-
-// ----------------------
-// On Page Load
-// ----------------------
-document.addEventListener("DOMContentLoaded", async () => {
-    initMap();
+document.addEventListener("DOMContentLoaded", () => {
+    // 1. Restore the Clock
     startClock();
-
+    
+    // 2. Setup the Date Picker with default "ALL" view
     const datePicker = document.getElementById('date-picker');
-    datePicker.valueAsDate = new Date();
-    datePicker.addEventListener('change', fetchFlights);
+    if (datePicker) {
+        datePicker.addEventListener('change', () => fetchFlights(datePicker.value));
+    }
 
-    await fetchFlights(); // Load today's flights automatically
+    // 3. Initial Load
+    fetchFlights("ALL");
 });
 
-// ----------------------
-// Initialize Map
-// ----------------------
-function initMap() {
-    map = L.map('map', { zoomControl: false }).setView([35.0, -95.0], 4);
-    L.tileLayer('https://{s}.basemaps.cartocdn.com/dark_all/{z}/{x}/{y}{r}.png').addTo(map);
-}
-
-// ----------------------
-// Clock
-// ----------------------
 function startClock() {
     setInterval(() => {
-        document.getElementById('clock').innerText = new Date().toLocaleTimeString('en-US', { hour12: false });
+        const el = document.getElementById('clock');
+        if (el) {
+            el.innerText = new Date().toLocaleTimeString('en-US', { hour12: false });
+        }
     }, 1000);
 }
 
-// ----------------------
-// Format Date
-// ----------------------
-function getFormattedDate() {
-    const dateValue = document.getElementById('date-picker').value;
-    if (!dateValue) return ""; 
-    const parts = dateValue.split('-'); // yyyy-mm-dd
-    return `${parts[1]}/${parts[2]}/${parts[0]}`; // mm/dd/yyyy
-}
-
-// ----------------------
-// Fetch Flights
-// ----------------------
-async function fetchFlights() {
-    const targetDate = getFormattedDate() || "ALL";
+async function fetchFlights(targetDate = "ALL") {
     try {
-        const res = await fetch(`/api/flights?date=${encodeURIComponent(targetDate)}`);
-        if (!res.ok) throw new Error("Network error");
-        allData = await res.json();
-        renderStations(allData);
+        const res = await fetch(`${API_BASE}/api/flights?date=${targetDate}`);
+        const data = await res.json();
+        renderDashboard(data);
     } catch (e) {
-        console.error("System Offline", e);
-        const panel = document.getElementById('data-panel');
-        panel.innerHTML = '<div style="color:var(--muted); padding:20px; font-weight: 600;">System Offline or No Flights Found.</div>';
+        console.error("Connection to API failed.");
     }
 }
 
-// ----------------------
-// Render Flights by Station
-// ----------------------
-function renderStations(dataObject) {
+function renderDashboard(rides) {
     const panel = document.getElementById('data-panel');
+    if (!panel) return;
     panel.innerHTML = '';
 
-    if (!dataObject || Object.keys(dataObject).length === 0) {
-        panel.innerHTML = '<div style="color:var(--muted); padding:20px; font-weight: 600;">No flights found for selected date.</div>';
+    if (!rides || rides.length === 0) {
+        panel.innerHTML = `
+            <div style="padding:40px; text-align:center; color:#888; border:2px dashed #333; border-radius:15px; margin:20px;">
+                No ARRIVAL flights found. <br> 
+                <small>Ensure the PDF contains "Run Type: ARRIVAL".</small>
+            </div>`;
         return;
     }
 
-    for (const [station, flights] of Object.entries(dataObject)) {
-        if (!flights || flights.length === 0) continue;
+    // Organize by Date for better UI grouping
+    const grouped = {};
+    rides.forEach(r => {
+        if (!grouped[r.date]) grouped[r.date] = [];
+        grouped[r.date].push(r);
+    });
 
-        const block = document.createElement('div');
-        block.className = 'station-block';
-        block.innerHTML = `
-            <div class="station-header">
-                <div class="station-title">📍 Station: ${station}</div>
-                <div class="weather-chip" id="weather-${station}">Loading...</div>
+    for (const [date, flightList] of Object.entries(grouped)) {
+        const section = document.createElement('div');
+        section.className = 'station-block';
+        section.innerHTML = `
+            <div class="station-header" style="display:flex; justify-content:space-between; align-items:center;">
+                <div class="station-title">📅 Date: ${date}</div>
+                <div style="font-size:0.8rem; color:#10ffbe;">${flightList.length} Arrivals</div>
             </div>
             <div class="flight-list"></div>
         `;
-        panel.appendChild(block);
+        panel.appendChild(section);
 
-        const listContainer = block.querySelector('.flight-list');
-        flights.forEach(f => {
+        const list = section.querySelector('.flight-list');
+
+        flightList.forEach(ride => {
             const card = document.createElement('div');
             card.className = 'flight-card search-target';
-            card.setAttribute('data-flight', f.flight.toLowerCase());
+            card.setAttribute('data-search', `${ride.flight} ${ride.passenger}`.toLowerCase());
 
-            const details = f.live_details || { status_text: "OFFLINE", terminal: "TBD", gate: "TBD", baggage: "TBD", aircraft: "UNK", eta: "TBD", accuracy: "N/A" };
-
-            let badgeColor = "rgba(255,255,255,0.1)";
-            let textColor = "white";
-            let statusLabel = details.status_text;
-
-            if(statusLabel.includes("LANDED")) { badgeColor = "rgba(148, 163, 184, 0.2)"; textColor = "#94a3b8"; }
-            if(statusLabel.includes("EN ROUTE")) { badgeColor = "rgba(73, 119, 255, 0.2)"; textColor = "#4977ff"; }
-            if(statusLabel.includes("ON TIME")) { badgeColor = "rgba(16, 255, 190, 0.2)"; textColor = "#10ffbe"; }
-            if(statusLabel.includes("DELAYED")) { badgeColor = "rgba(239, 68, 68, 0.2)"; textColor = "#ef4444"; }
-            if(statusLabel.includes("OFFLINE")) { badgeColor = "rgba(255, 165, 0, 0.2)"; textColor = "#ffa500"; }
-
+            // RESTORED ORIGINAL COMPLEX LAYOUT
             card.innerHTML = `
-                <div style="width:100%">
-                    <div style="display:flex; justify-content:space-between; align-items:center; border-bottom:1px solid rgba(255,255,255,0.1); padding-bottom:10px; margin-bottom:15px;">
+                <div style="padding: 15px;">
+                    <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:12px;">
+                        <span style="font-weight:800; color:var(--accent); font-size:1.1rem;">✈️ ${ride.flight}</span>
+                        <span style="font-size:0.7rem; color:#888; background:#222; padding:2px 6px; border-radius:4px;">RID# ${ride.ride_no}</span>
+                    </div>
+                    
+                    
+                    
+                    <div style="display:grid; grid-template-columns: 1fr 1fr; gap:10px; margin-bottom:12px; border-top:1px solid #333; padding-top:10px;">
                         <div>
-                            <div class="flight-no">✈️ ${f.flight}</div>
-                            <div class="flight-airline">${f.airline} • ${f.run_type}</div>
+                            <div style="font-size:0.65rem; color:#888; text-transform:uppercase;">Arrival Time</div>
+                            <div style="font-size:0.9rem; color:#fff; font-weight:bold;">🕒 ${ride.arrival_time}</div>
                         </div>
-                        <div style="text-align:right; padding-right:30px;">
-                            <div class="status-badge" style="background:${badgeColor}; color:${textColor};">${statusLabel}</div>
-                            <div style="font-size:0.85rem; margin-top:8px; color:var(--muted); font-weight:600;">Pickup: ${f.arrival}</div>
+                        <div>
+                            <div style="font-size:0.65rem; color:#888; text-transform:uppercase;">Run Type</div>
+                            <div style="font-size:0.8rem; color:#10ffbe; font-weight:bold;">${ride.run_type}</div>
                         </div>
                     </div>
-
-                    <div class="flight-details-grid">
-                        <div class="detail-box"><span class="detail-label">TERMINAL</span><span class="detail-value">${details.terminal}</span></div>
-                        <div class="detail-box"><span class="detail-label">GATE</span><span class="detail-value" style="color: var(--success);">${details.gate}</span></div>
-                        <div class="detail-box"><span class="detail-label">BAGGAGE</span><span class="detail-value" style="color:#f59e0b;">💼 ${details.baggage}</span></div>
-                        <div class="detail-box"><span class="detail-label">AIRCRAFT</span><span class="detail-value" style="color: var(--muted);">${details.aircraft}</span></div>
-                        <div class="detail-box"><span class="detail-label">EST. LANDING</span><span class="detail-value" style="color: var(--accent);">${details.eta}</span></div>
-                        <div class="detail-box"><span class="detail-label">ACCURACY</span><span class="detail-value" style="color: var(--text);">${details.accuracy}</span></div>
+                    
+                    <div style="display:flex; align-items:center; gap:6px; margin-top:5px;">
+                        <div style="width:8px; height:8px; background:#10ffbe; border-radius:50%; box-shadow: 0 0 8px #10ffbe;"></div>
+                        <span style="font-size:0.7rem; color:#10ffbe; font-weight:700; text-transform:uppercase;">${ride.status}</span>
                     </div>
                 </div>
             `;
-
-            const removeBtn = document.createElement('button');
-            removeBtn.innerText = "✕";
-            removeBtn.className = "remove-flight-btn";
-            removeBtn.onclick = (event) => { event.stopPropagation(); deleteFlight(f.id); };
-            card.appendChild(removeBtn);
-
-            card.onclick = () => pinOnMap(f);
-            listContainer.appendChild(card);
+            list.appendChild(card);
         });
     }
 }
 
-// ----------------------
-// Filter Flights by Search
-// ----------------------
+async function forceScan() {
+    const status = document.getElementById('scan-status');
+    if (status) status.innerText = "⚡ Analyzing PDF Blocks...";
+    
+    try {
+        const res = await fetch(`${API_BASE}/api/scan_manifests`, { method: 'POST' });
+        const result = await res.json();
+        
+        if (status) status.innerText = `✅ Success: ${result.added} Arrivals Stored.`;
+        
+        // Show all results immediately
+        fetchFlights("ALL");
+    } catch (err) {
+        if (status) status.innerText = "❌ Scan Failed.";
+    }
+}
+
 function filterSearch() {
     const query = document.getElementById('search-bar').value.toLowerCase();
     document.querySelectorAll('.search-target').forEach(card => {
-        card.style.display = card.getAttribute('data-flight').includes(query) ? 'flex' : 'none';
+        const content = card.getAttribute('data-search');
+        card.style.display = content.includes(query) ? 'block' : 'none';
     });
-}
-
-// ----------------------
-// Map Pinning
-// ----------------------
-function pinOnMap(flightData) {
-    activeRouteLayers.forEach(layer => map.removeLayer(layer));
-    activeRouteLayers = [];
-
-    const route = flightData.route;
-    if (!route) return;
-
-    const originCoords = [route.origin.lat, route.origin.lng];
-    const destCoords = [route.destination.lat, route.destination.lng];
-
-    const routeLine = L.polyline([originCoords, destCoords], { color:'#4977ff', weight:3, dashArray:'5,10', opacity:0.8 }).addTo(map);
-    activeRouteLayers.push(routeLine);
-
-    const originMarker = L.circleMarker(originCoords, { color:'#ef4444', radius:5, fillOpacity:0.5 }).addTo(map).bindPopup(`<b>DEP: ${route.origin_code}</b><br>${route.origin.city || 'Unknown'}`);
-    const destMarker = L.circleMarker(destCoords, { color:'#10ffbe', radius:8, fillOpacity:0.9 }).addTo(map).bindPopup(`<b>ARR: ${route.dest_code}</b><br>Flight: ${flightData.flight}`).openPopup();
-
-    activeRouteLayers.push(originMarker, destMarker);
-    map.fitBounds(routeLine.getBounds(), { padding:[50,50], maxZoom:6 });
-}
-
-
-
-// ----------------------
-// Flight Delete
-// ----------------------
-async function deleteFlight(id) {
-    if(confirm("Stop tracking this flight?")) {
-        const targetDate = getFormattedDate() || "ALL";
-        await fetch(`/api/flights/${encodeURIComponent(targetDate)}/${id}`, { method: 'DELETE' });
-        await fetchFlights();
-    }
-}
-
-
-// ----------------------
-// Force Scan Manifests
-// ----------------------
-async function forceScan() {
-    const statusEl = document.getElementById("scan-status");
-    statusEl.innerText = "Scanning manifests...";
-
-    try {
-        const res = await fetch("http://127.0.0.1:8000/api/scan_manifests", { method: "POST" });
-        const data = await res.json();
-
-        if (data.status === "ok") {
-            statusEl.innerText = `✅ Scan complete! Found ${data.flights_found} flights.`;
-            await fetchFlights(); // refresh dashboard flights
-        } else {
-            statusEl.innerText = `❌ ${data.message}`;
-        }
-    } catch (e) {
-        statusEl.innerText = "❌ Error scanning manifests. Backend offline?";
-        console.error(e);
-    }
 }
