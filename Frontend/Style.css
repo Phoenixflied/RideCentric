@@ -150,9 +150,63 @@ body {
     border-radius: 8px;
     border: 1px solid rgba(255,255,255,0.05);
 }
-.detail-box { display: flex; flex-direction: column; align-items: flex-start; }
-.detail-label { font-size: 0.65rem; color: var(--muted); font-weight: 800; letter-spacing: 0.5px; margin-bottom: 3px; }
-.detail-value { font-size: 0.95rem; color: white; font-weight: 800; }
+.flight-detail-row {
+    font-size: 0.9rem;
+    line-height: 1.4;
+}
+
+.detail-live-status {
+    font-weight: 600;
+    padding: 2px 6px;
+    border-radius: 4px;
+    font-size: 0.85rem;
+}
+
+.detail-live-status.on-time,
+.detail-live-status.scheduled,
+.detail-live-status.landed {
+    color: var(--success);
+    background: rgba(16, 255, 190, 0.1);
+}
+
+.detail-live-status.delayed {
+    color: var(--warning);
+    background: rgba(245, 158, 11, 0.1);
+}
+
+.detail-live-status.cancelled {
+    color: var(--error);
+    background: rgba(239, 68, 68, 0.1);
+}
+
+.detail-live-status.in-air,
+.detail-live-status.en-route {
+    color: var(--accent);
+    background: rgba(73, 119, 255, 0.1);
+}
+
+.detail-live-status.unknown,
+.detail-live-status.api-error,
+.detail-live-status.flight-not-found {
+    color: var(--muted);
+    background: rgba(148, 163, 184, 0.1);
+}
+
+.detail-live-status.loading {
+    color: var(--muted);
+}
+
+.detail-map-link {
+    color: var(--accent) !important;
+    text-decoration: none;
+    font-weight: 600;
+    transition: color 0.2s ease;
+}
+
+.detail-map-link:hover {
+    color: var(--success) !important;
+    text-decoration: underline;
+}
 
 .remove-flight-btn {
     position: absolute;

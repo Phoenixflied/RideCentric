@@ -196,6 +196,8 @@ function showAllFlights() {
 function showFlightDetails(ride) {
     const modal = document.getElementById('flight-details-modal');
     if (!modal) return;
+    
+    // Populate basic flight details
     modal.querySelector('.detail-flight').innerText = ride.flight;
     modal.querySelector('.detail-ride').innerText = ride.ride_no;
     modal.querySelector('.detail-date').innerText = ride.date;
@@ -204,7 +206,155 @@ function showFlightDetails(ride) {
     modal.querySelector('.detail-gate').innerText = ride.gate;
     modal.querySelector('.detail-status').innerText = ride.status;
     modal.querySelector('.detail-passenger').innerText = ride.passenger || 'N/A';
+    
+    // Initialize live status and map link
+    const liveStatusEl = modal.querySelector('.detail-live-status');
+    const mapLinkEl = modal.querySelector('.detail-map-link');
+    
+    liveStatusEl.innerText = 'Loading...';
+    mapLinkEl.innerText = 'Loading map...';
+    mapLinkEl.href = '#';
+    
+    // Fetch live flight data from external API
+    fetchLiveFlightData(ride.flight, ride.date)
+        .then(data => {
+            if (data) {
+                // Apply status with appropriate styling
+                liveStatusEl.innerText = data.status || 'Unknown';
+                liveStatusEl.className = 'detail-live-status'; // Reset classes
+                
+                // Add status-specific class for styling
+                const statusClass = data.status.toLowerCase()
+                    .replace(/\s+/g, '-')
+                    .replace(/[^a-z0-9-]/g, '');
+                liveStatusEl.classList.add(statusClass);
+                
+                if (data.map_url) {
+                    mapLinkEl.innerText = 'View Flight Map';
+                    mapLinkEl.href = data.map_url;
+                    mapLinkEl.style.display = 'inline';
+                } else {
+                    mapLinkEl.innerText = 'Map not available';
+                    mapLinkEl.href = '#';
+                    mapLinkEl.style.display = 'inline';
+                }
+            } else {
+                liveStatusEl.innerText = 'API unavailable';
+                liveStatusEl.className = 'detail-live-status api-error';
+                mapLinkEl.innerText = 'Map not available';
+                mapLinkEl.href = '#';
+            }
+        })
+        .catch(error => {
+            console.error('Error fetching live flight data:', error);
+            liveStatusEl.innerText = 'Error loading status';
+            liveStatusEl.className = 'detail-live-status api-error';
+            mapLinkEl.innerText = 'Map unavailable';
+            mapLinkEl.href = '#';
+        });
+    
     modal.style.display = 'flex';
+}
+
+// =============================================================================
+// AIRLINE API CONFIGURATION - UPDATE THESE VALUES FOR YOUR AIRLINE API
+// =============================================================================
+// Replace the values below with your actual airline API credentials and endpoints
+// Common airline APIs: FlightAware, FlightStats, ADS-B Exchange, etc.
+
+const AIRLINE_API_CONFIG = {
+    baseUrl: 'https://api.flightaware.com/v3', // Your airline API base URL
+    apiKey: 'YOUR_AIRLINE_API_KEY_HERE', // Your actual API key from the airline
+    endpoints: {
+        flightInfo: '/flights/{flightNumber}', // API endpoint pattern for flight info
+        flightMap: '/flights/{flightNumber}/map' // API endpoint pattern for flight map (if separate)
+    }
+};
+
+// =============================================================================
+
+async function fetchLiveFlightData(flightNumber, date) {
+    try {
+        const { baseUrl, apiKey, endpoints } = AIRLINE_API_CONFIG;
+        
+        // Clean flight number (remove any prefixes/suffixes if needed)
+        const cleanFlightNumber = flightNumber.replace(/[^A-Z0-9]/g, '');
+        
+        // Build API URL - adjust parameters based on your airline API
+        const apiUrl = `${baseUrl}${endpoints.flightInfo.replace('{flightNumber}', cleanFlightNumber)}`;
+        
+        const response = await fetch(apiUrl, {
+            method: 'GET',
+            headers: {
+                'x-apiKey': apiKey, // Common header for airline APIs
+                'Content-Type': 'application/json'
+                // Add other required headers here
+            }
+        });
+        
+        if (!response.ok) {
+            if (response.status === 404) {
+                return { status: 'Flight not found', map_url: null };
+            }
+            throw new Error(`API request failed: ${response.status}`);
+        }
+        
+        const data = await response.json();
+        
+        // Parse airline API response - adjust these mappings based on your API's response structure
+        let status = 'Unknown';
+        let mapUrl = null;
+        
+        // Example mappings for common airline APIs:
+        if (data.flights && data.flights.length > 0) {
+            const flight = data.flights[0];
+            
+            // Status mapping (adjust based on your API's status values)
+            if (flight.status) {
+                switch (flight.status.toLowerCase()) {
+                    case 'on_time':
+                    case 'scheduled':
+                        status = 'On Time';
+                        break;
+                    case 'delayed':
+                        status = `Delayed ${flight.delay || ''}`.trim();
+                        break;
+                    case 'cancelled':
+                        status = 'Cancelled';
+                        break;
+                    case 'landed':
+                        status = 'Landed';
+                        break;
+                    case 'en_route':
+                    case 'airborne':
+                        status = 'In Air';
+                        break;
+                    default:
+                        status = flight.status;
+                }
+            }
+            
+            // Map URL (adjust based on your API's map URL field)
+            if (flight.flightMapUrl || flight.map_url) {
+                mapUrl = flight.flightMapUrl || flight.map_url;
+            } else if (endpoints.flightMap) {
+                // If map is separate endpoint, construct URL
+                mapUrl = `${baseUrl}${endpoints.flightMap.replace('{flightNumber}', cleanFlightNumber)}`;
+            }
+        }
+        
+        return {
+            status: status,
+            map_url: mapUrl
+        };
+        
+    } catch (error) {
+        console.error('Airline API error:', error);
+        return {
+            status: 'API Error',
+            map_url: null
+        };
+    }
 }
 
 function closeFlightDetails() {
