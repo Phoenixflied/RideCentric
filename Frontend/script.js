@@ -255,6 +255,10 @@ function showFlightDetails(ride) {
     mapLinkEl.innerText = 'Loading map...';
     mapLinkEl.href = '#';
     
+    // Remove previous click handler and add new one for live tracking
+    mapLinkEl.removeEventListener('click', handleMapLinkClick);
+    mapLinkEl.addEventListener('click', (e) => handleMapLinkClick(e, ride));
+    
     // Fetch live flight data from external API
     fetchLiveFlightData(ride.flight, ride.date)
         .then(data => {
@@ -270,19 +274,20 @@ function showFlightDetails(ride) {
                 liveStatusEl.classList.add(statusClass);
                 
                 if (data.map_url) {
-                    mapLinkEl.innerText = 'View Flight Map';
-                    mapLinkEl.href = data.map_url;
-                    mapLinkEl.style.display = 'inline';
+                    mapLinkEl.innerText = '🗺️ Track Live';
+                    mapLinkEl.href = '#';
+                    mapLinkEl.style.cursor = 'pointer';
                 } else {
                     mapLinkEl.innerText = 'Map not available';
                     mapLinkEl.href = '#';
-                    mapLinkEl.style.display = 'inline';
+                    mapLinkEl.style.cursor = 'default';
                 }
             } else {
                 liveStatusEl.innerText = 'API unavailable';
                 liveStatusEl.className = 'detail-live-status api-error';
                 mapLinkEl.innerText = 'Map not available';
                 mapLinkEl.href = '#';
+                mapLinkEl.style.cursor = 'default';
             }
         })
         .catch(error => {
@@ -291,6 +296,7 @@ function showFlightDetails(ride) {
             liveStatusEl.className = 'detail-live-status api-error';
             mapLinkEl.innerText = 'Map unavailable';
             mapLinkEl.href = '#';
+            mapLinkEl.style.cursor = 'default';
         });
     
     modal.style.display = 'flex';
@@ -400,4 +406,313 @@ async function fetchLiveFlightData(flightNumber, date) {
 function closeFlightDetails() {
     const modal = document.getElementById('flight-details-modal');
     if (modal) modal.style.display = 'none';
+}
+
+// =============================================================================
+// LIVE FLIGHT TRACKING ON DASHBOARD MAP
+// =============================================================================
+
+// Global variables for flight tracking
+let currentFlightMarker = null;
+let currentFlightPath = null;
+let flightTrackingInterval = null;
+
+// Handle map link click to show live tracking on dashboard map
+function handleMapLinkClick(event, ride) {
+    event.preventDefault();
+    
+    // Close the flight details modal
+    closeFlightDetails();
+    
+    // Start live flight tracking on the main map
+    startFlightTracking(ride);
+}
+
+// Start live flight tracking on the dashboard map
+async function startFlightTracking(ride) {
+    try {
+        // Clear any existing flight tracking
+        clearFlightTracking();
+        
+        // Fetch initial flight data
+        const flightData = await fetchLiveFlightData(ride.flight, ride.date);
+        
+        if (!flightData || !flightData.map_url) {
+            alert('Flight tracking data not available');
+            return;
+        }
+        
+        // For airline APIs, the map_url might be a direct tracking endpoint
+        // Adjust this based on your specific airline API response
+        const trackingResponse = await fetch(flightData.map_url);
+        const trackingData = await trackingResponse.json();
+        
+        // Extract flight position (adjust based on your API response structure)
+        const flightPosition = extractFlightPosition(trackingData);
+        
+        if (flightPosition) {
+            // Add flight marker to map
+            addFlightMarkerToMap(flightPosition, ride);
+            
+            // Optionally add flight path if available
+            if (trackingData.flightPath || trackingData.path) {
+                addFlightPathToMap(trackingData.flightPath || trackingData.path);
+            }
+            
+            // Center map on flight
+            map.setView([flightPosition.lat, flightPosition.lng], 8);
+            
+            // Start periodic updates (every 30 seconds)
+            flightTrackingInterval = setInterval(async () => {
+                try {
+                    const updatedData = await fetch(flightData.map_url).then(r => r.json());
+                    const newPosition = extractFlightPosition(updatedData);
+                    if (newPosition) {
+                        updateFlightMarker(newPosition, ride);
+                    }
+                } catch (error) {
+                    console.error('Error updating flight position:', error);
+                }
+            }, 30000);
+            
+            // Show tracking info panel
+            showTrackingInfoPanel(ride, flightData);
+        } else {
+            alert('Unable to locate flight position');
+        }
+        
+    } catch (error) {
+        console.error('Error starting flight tracking:', error);
+        alert('Error loading flight tracking: ' + error.message);
+    }
+}
+
+// Extract flight position from API response (customize based on your API)
+function extractFlightPosition(trackingData) {
+    // Adjust these paths based on your airline API response structure
+    // Common patterns:
+    if (trackingData.position) {
+        return {
+            lat: trackingData.position.latitude || trackingData.position.lat,
+            lng: trackingData.position.longitude || trackingData.position.lng,
+            altitude: trackingData.position.altitude,
+            heading: trackingData.position.heading,
+            speed: trackingData.position.speed
+        };
+    }
+    
+    if (trackingData.latitude && trackingData.longitude) {
+        return {
+            lat: trackingData.latitude,
+            lng: trackingData.longitude,
+            altitude: trackingData.altitude,
+            heading: trackingData.heading,
+            speed: trackingData.speed
+        };
+    }
+    
+    // If the API returns an array of positions, use the latest one
+    if (Array.isArray(trackingData) && trackingData.length > 0) {
+        const latest = trackingData[trackingData.length - 1];
+        return {
+            lat: latest.lat || latest.latitude,
+            lng: latest.lng || latest.longitude,
+            altitude: latest.altitude,
+            heading: latest.heading,
+            speed: latest.speed
+        };
+    }
+    
+    return null;
+}
+
+// Add flight marker to map
+function addFlightMarkerToMap(position, ride) {
+    // Create custom plane icon
+    const planeIcon = L.divIcon({
+        html: '✈️',
+        className: 'flight-plane-icon',
+        iconSize: [30, 30],
+        iconAnchor: [15, 15]
+    });
+    
+    currentFlightMarker = L.marker([position.lat, position.lng], {
+        icon: planeIcon,
+        rotationAngle: position.heading || 0
+    }).addTo(map);
+    
+    // Add popup with flight info
+    currentFlightMarker.bindPopup(`
+        <div style="font-family: 'JetBrains Mono', monospace; text-align: center;">
+            <strong>${ride.flight}</strong><br>
+            Alt: ${position.altitude || 'N/A'} ft<br>
+            Speed: ${position.speed || 'N/A'} kts<br>
+            Heading: ${position.heading || 'N/A'}°
+        </div>
+    `).openPopup();
+}
+
+// Add flight path to map
+function addFlightPathToMap(pathData) {
+    if (!pathData || !Array.isArray(pathData)) return;
+    
+    const pathCoords = pathData.map(point => [point.lat || point.latitude, point.lng || point.longitude]);
+    
+    currentFlightPath = L.polyline(pathCoords, {
+        color: '#10ffbe',
+        weight: 3,
+        opacity: 0.8
+    }).addTo(map);
+}
+
+// Update flight marker position
+function updateFlightMarker(newPosition, ride) {
+    if (currentFlightMarker) {
+        currentFlightMarker.setLatLng([newPosition.lat, newPosition.lng]);
+        if (newPosition.heading) {
+            currentFlightMarker.setRotationAngle(newPosition.heading);
+        }
+        
+        // Update popup content
+        currentFlightMarker.setPopupContent(`
+            <div style="font-family: 'JetBrains Mono', monospace; text-align: center;">
+                <strong>${ride.flight}</strong><br>
+                Alt: ${newPosition.altitude || 'N/A'} ft<br>
+                Speed: ${newPosition.speed || 'N/A'} kts<br>
+                Heading: ${newPosition.heading || 'N/A'}°
+            </div>
+        `);
+    }
+    
+    // Update path if new segment available
+    if (currentFlightPath && newPosition.path) {
+        // Add new point to path
+        const newCoords = [newPosition.lat, newPosition.lng];
+        currentFlightPath.addLatLng(newCoords);
+    }
+}
+
+// Clear flight tracking
+function clearFlightTracking() {
+    if (currentFlightMarker) {
+        map.removeLayer(currentFlightMarker);
+        currentFlightMarker = null;
+    }
+    
+    if (currentFlightPath) {
+        map.removeLayer(currentFlightPath);
+        currentFlightPath = null;
+    }
+    
+    if (flightTrackingInterval) {
+        clearInterval(flightTrackingInterval);
+        flightTrackingInterval = null;
+    }
+    
+    // Hide tracking info panel if it exists
+    const trackingPanel = document.getElementById('flight-tracking-panel');
+    if (trackingPanel) {
+        trackingPanel.style.display = 'none';
+    }
+}
+
+// Show tracking info panel
+function showTrackingInfoPanel(ride, flightData) {
+    // Create or update tracking info panel
+    let trackingPanel = document.getElementById('flight-tracking-panel');
+    
+    if (!trackingPanel) {
+        trackingPanel = document.createElement('div');
+        trackingPanel.id = 'flight-tracking-panel';
+        trackingPanel.style.cssText = `
+            position: absolute;
+            top: 20px;
+            right: 20px;
+            background: rgba(15, 23, 42, 0.9);
+            backdrop-filter: blur(10px);
+            border: 1px solid rgba(255, 255, 255, 0.1);
+            border-radius: 8px;
+            padding: 15px;
+            z-index: 1000;
+            font-family: 'JetBrains Mono', monospace;
+            color: white;
+            min-width: 200px;
+        `;
+        
+        document.getElementById('map').appendChild(trackingPanel);
+    }
+    
+    trackingPanel.innerHTML = `
+        <button style="position: absolute; top: 5px; right: 10px; background: none; border: none; color: white; font-size: 20px; cursor: pointer; padding: 0;" onclick="clearFlightTracking()">×</button>
+        <div style="margin-bottom: 10px;">
+            <strong style="color: #10ffbe;">${ride.flight}</strong>
+        </div>
+        <div style="font-size: 0.8rem; color: #94a3b8;">
+            ${ride.flight} • ${ride.date}<br>
+            Status: <span style="color: #10ffbe;">${flightData.status || 'Tracking'}</span>
+        </div>
+        <div style="margin-top: 10px; font-size: 0.7rem; color: #666;">
+            Click plane icon for details<br>
+            Updates every 30 seconds
+        </div>
+    `;
+    
+    trackingPanel.style.display = 'block';
+    
+    // Also add a clear tracking button to the header
+    addClearTrackingButton();
+}
+
+// Add a clear tracking button to the header when tracking is active
+function addClearTrackingButton() {
+    // Remove existing clear button if any
+    const existingBtn = document.getElementById('clear-tracking-btn');
+    if (existingBtn) existingBtn.remove();
+    
+    // Create new clear button
+    const clearBtn = document.createElement('button');
+    clearBtn.id = 'clear-tracking-btn';
+    clearBtn.className = 'btn';
+    clearBtn.innerText = '❌ Clear Tracking';
+    clearBtn.onclick = clearFlightTracking;
+    clearBtn.style.marginLeft = '10px';
+    
+    // Add to header actions
+    const headerActions = document.querySelector('.header-actions');
+    if (headerActions) {
+        headerActions.appendChild(clearBtn);
+    }
+}
+
+// Clear flight tracking
+function clearFlightTracking() {
+    if (currentFlightMarker) {
+        map.removeLayer(currentFlightMarker);
+        currentFlightMarker = null;
+    }
+    
+    if (currentFlightPath) {
+        map.removeLayer(currentFlightPath);
+        currentFlightPath = null;
+    }
+    
+    if (flightTrackingInterval) {
+        clearInterval(flightTrackingInterval);
+        flightTrackingInterval = null;
+    }
+    
+    // Hide tracking info panel if it exists
+    const trackingPanel = document.getElementById('flight-tracking-panel');
+    if (trackingPanel) {
+        trackingPanel.style.display = 'none';
+    }
+    
+    // Remove clear tracking button
+    const clearBtn = document.getElementById('clear-tracking-btn');
+    if (clearBtn) {
+        clearBtn.remove();
+    }
+    
+    // Reset map view to default (Miami area)
+    map.setView([25.7617, -80.1918], 12);
 }

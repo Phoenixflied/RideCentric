@@ -244,6 +244,19 @@ body {
     text-decoration: underline;
 }
 
+/* Flight Tracking Styles */
+.flight-plane-icon {
+    font-size: 24px;
+    text-align: center;
+    line-height: 30px;
+    filter: drop-shadow(0 2px 4px rgba(0,0,0,0.3));
+}
+
+.flight-plane-icon:hover {
+    transform: scale(1.2);
+    transition: transform 0.2s ease;
+}
+
 .remove-flight-btn {
     position: absolute;
     top: 15px;
