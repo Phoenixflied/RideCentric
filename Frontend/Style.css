@@ -6,6 +6,8 @@
     --success: #10ffbe; 
     --text: #e2e8f0; 
     --muted: #94a3b8;
+    --error: #ef4444;
+    --warning: #f59e0b;
 }
 
 body {
@@ -20,9 +22,10 @@ body {
 .glass-header {
     display: flex; justify-content: space-between; align-items: center; padding: 15px 30px; 
     background: var(--glass); border-bottom: 1px solid var(--border); backdrop-filter: blur(15px); z-index: 100;
+    box-shadow: 0 4px 20px rgba(0,0,0,0.3);
 }
 .brand-container { display: flex; align-items: center; gap: 10px; width: 250px; }
-.brand { font-size: 1.6rem; font-weight: 900; letter-spacing: -0.5px; }
+.brand { font-size: 1.6rem; font-weight: 900; letter-spacing: -0.5px; background: linear-gradient(45deg, var(--accent), var(--success)); -webkit-background-clip: text; -webkit-text-fill-color: transparent; background-clip: text; }
 .brand span { color: var(--accent); }
 
 .live-dot {
@@ -37,24 +40,24 @@ body {
     background: rgba(255, 255, 255, 0.05); padding: 8px 16px; border-radius: 8px;
     border: 1px solid rgba(255, 255, 255, 0.15); box-shadow: inset 0 0 10px rgba(255, 255, 255, 0.05);
 }
-.white-date-btn {
-    background-color: #ffffff; color: #070a12; padding: 12px 16px; border-radius: 8px; border: none;
+#date-picker {
+    background-color: #ffffff; color: #070a12; padding: 14px 18px; border-radius: 8px; border: none;
     font-family: 'JetBrains Mono', monospace; font-weight: 800; font-size: 0.95rem; outline: none; cursor: pointer;
     box-shadow: 0 4px 15px rgba(255, 255, 255, 0.1); transition: all 0.2s ease; color-scheme: light;
 }
-.white-date-btn:hover { transform: translateY(-2px); box-shadow: 0 6px 20px rgba(255, 255, 255, 0.2); }
+#date-picker:hover { transform: translateY(-2px); box-shadow: 0 6px 20px rgba(255, 255, 255, 0.2); }
 
 .header-actions { display: flex; align-items: center; gap: 15px; width: auto; justify-content: flex-end;}
-.search-container input, .form-input {
-    width: 100%; padding: 12px 15px; border-radius: 8px; font-size: 0.95rem; font-family: 'JetBrains Mono', monospace;
+#search-bar {
+    width: 200px; padding: 14px 18px; border-radius: 8px; font-size: 0.95rem; font-family: 'JetBrains Mono', monospace;
     background: rgba(0,0,0,0.5); border: 1px solid var(--border); color: white; outline: none; transition: 0.2s;
 }
-.search-container input:focus, .form-input:focus { border-color: var(--accent); }
+#search-bar:focus { border-color: var(--accent); }
 
-.btn { padding: 12px 20px; border-radius: 8px; font-family: 'JetBrains Mono', monospace; font-weight: 800; cursor: pointer; border: none; transition: 0.2s; }
-.btn-primary { background: var(--accent); color: white; box-shadow: 0 4px 15px rgba(73, 119, 255, 0.3); }
+.btn { padding: 12px 20px; border-radius: 8px; font-family: 'JetBrains Mono', monospace; font-weight: 800; cursor: pointer; border: none; transition: all 0.3s ease; }
+.btn-primary { background: linear-gradient(45deg, var(--accent), #6b8cff); color: white; box-shadow: 0 4px 15px rgba(73, 119, 255, 0.3); }
 .btn-secondary { background: rgba(255,255,255,0.1); color: white; }
-.btn:hover { filter: brightness(1.2); transform: translateY(-1px); }
+.btn:hover { transform: translateY(-2px); box-shadow: 0 6px 20px rgba(73, 119, 255, 0.4); }
 
 .split-layout {
     display: flex;
@@ -65,10 +68,42 @@ body {
     height: 100%;
     overflow-y: auto;
     padding: 30px;
-
-    /* ADD THIS 👇 */
     min-height: 0;
-}       /* IMPORTANT: remove flex */
+    position: relative;
+}
+
+.panel-left.loading::before {
+    content: '';
+    position: absolute;
+    top: 0;
+    left: 0;
+    right: 0;
+    bottom: 0;
+    background: rgba(7, 10, 18, 0.8);
+    backdrop-filter: blur(5px);
+    z-index: 10;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    color: var(--success);
+    font-size: 1.2rem;
+    font-weight: 800;
+}
+
+.panel-left.loading::after {
+    content: 'Loading flights...';
+    position: absolute;
+    top: 50%;
+    left: 50%;
+    transform: translate(-50%, -50%);
+    z-index: 11;
+    animation: pulse 1.5s infinite;
+}
+
+@keyframes pulse {
+    0%, 100% { opacity: 0.7; }
+    50% { opacity: 1; }
+}
 
 
 .panel-right {
@@ -91,13 +126,15 @@ body {
     align-items: flex-start;
     flex-direction: column;
     padding: 18px 20px; 
-    background: rgba(255, 255, 255, 0.03); 
+    background: linear-gradient(135deg, rgba(255, 255, 255, 0.03), rgba(255, 255, 255, 0.01)); 
     border: 1px solid var(--border); 
-    border-radius: 10px; 
+    border-radius: 12px; 
     cursor: pointer; 
-    transition: all 0.2s ease;
+    transition: all 0.3s ease;
     position: relative;
+    box-shadow: 0 4px 15px rgba(0,0,0,0.2);
 }
+.flight-card:hover { border-color: var(--accent); background: linear-gradient(135deg, rgba(73, 119, 255, 0.1), rgba(16, 255, 190, 0.05)); transform: translateX(6px); box-shadow: 0 8px 25px rgba(73, 119, 255, 0.3); }
 .flight-card:hover { border-color: var(--accent); background: rgba(73, 119, 255, 0.08); transform: translateX(6px); }
 .flight-no { font-weight: 900; font-size: 1.2rem; color: white; letter-spacing: 0.5px;}
 .flight-airline { font-size: 0.85rem; font-weight: 600; color: var(--muted); margin-top: 6px; }
@@ -146,21 +183,25 @@ body {
 /* FORCES MODAL TO THE FRONT */
 .modal-overlay { 
     position: fixed; inset: 0; background: rgba(0,0,0,0.6); backdrop-filter: blur(4px); 
-    display: flex; justify-content: flex-start; align-items: flex-start; 
+    display: flex; justify-content: center; align-items: center; 
     z-index: 999999 !important; 
+    animation: fadeIn 0.3s ease-out;
+}
+@keyframes fadeIn {
+    from { opacity: 0; }
+    to { opacity: 1; }
 }
 .modal-box { 
     background: var(--glass); padding: 40px; 
-    width: 30%; min-width: 350px; height: 100vh; 
-    border-radius: 0; border-right: 1px solid rgba(255,255,255,0.2); 
+    width: 30%; min-width: 350px; height: auto; max-height: 80vh; overflow-y: auto;
+    border-radius: 15px; border: 1px solid var(--border); 
     display: flex; flex-direction: column; gap: 20px; 
-    box-shadow: 20px 0 50px rgba(0,0,0,0.5); 
-    animation: slideInLeft 0.3s ease-out forwards; 
-    position: relative; z-index: 999999 !important;
+    box-shadow: 0 20px 50px rgba(0,0,0,0.5); 
+    animation: slideIn 0.3s ease-out;
 }
-@keyframes slideInLeft {
-    from { transform: translateX(-100%); }
-    to { transform: translateX(0); }
+@keyframes slideIn {
+    from { transform: scale(0.9); opacity: 0; }
+    to { transform: scale(1); opacity: 1; }
 }
 .modal-actions { display: flex; justify-content: space-between; gap: 10px; margin-top: 20px;}
 .hidden { display: none !important; }
@@ -172,3 +213,42 @@ body {
     font-size: 0.9rem; letter-spacing: 1px; text-transform: uppercase; box-shadow: 0 4px 15px rgba(0, 0, 0, 0.5);
     pointer-events: none;
 }
+
+/* Modal Background */
+#add-flight-modal {
+    display: none; /* Hidden by default */
+    position: fixed;
+    z-index: 9999 !important; /* Sit on top of everything */
+    left: 0;
+    top: 0;
+    width: 100%;
+    height: 100%;
+    background-color: rgba(0,0,0,0.9); /* Darker overlay */
+}
+/* Modal Box */
+.modal-content {
+    background-color: #1a1a1a;
+    margin: 10% auto;
+    padding: 25px;
+    border: 1px solid #333;
+    width: 400px;
+    border-radius: 12px;
+    box-shadow: 0 0 20px rgba(0,0,0,0.5);
+}
+
+.close-btn { color: #888; float: right; font-size: 28px; cursor: pointer; }
+.close-btn:hover { color: #fff; }
+
+.input-group { margin-bottom: 15px; }
+.input-group label { display: block; color: #888; font-size: 0.8rem; margin-bottom: 5px; }
+.input-group input { 
+    width: 100%; padding: 10px; background: #222; border: 1px solid #444; 
+    color: white; border-radius: 6px; outline: none; 
+}
+.input-group input:focus { border-color: #10ffbe; }
+
+.save-btn {
+    width: 100%; padding: 12px; background: #10ffbe; color: black; 
+    border: none; border-radius: 6px; font-weight: bold; cursor: pointer; margin-top: 10px;
+}
+.save-btn:hover { background: #0de6aa; }

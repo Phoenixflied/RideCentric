@@ -1,262 +1,213 @@
-const API_BASE = window.location.origin;
+const API_BASE = "";
+let map;
 
+function getAuthToken() {
+    return localStorage.getItem('ridecentric_token');
+}
 
+function requireAuth() {
+    const token = getAuthToken();
+    if (!token) {
+        window.location.href = '/app/login.html';
+        return null;
+    }
+    return token;
+}
 
 document.addEventListener("DOMContentLoaded", () => {
-
-    // 1. Restore the Clock
-
-    startClock();
-
-   
-
-    // 2. Setup the Date Picker with default "ALL" view
-
-    const datePicker = document.getElementById('date-picker');
-
-    if (datePicker) {
-
-        datePicker.addEventListener('change', () => fetchFlights(datePicker.value));
-
-    }
-
-
-
-    // 3. Initial Load
-
+    if (!requireAuth()) return;
+    initClock();
+    initMap();
+    setupEventListeners();
     fetchFlights("ALL");
-
 });
 
-
-
-function startClock() {
-
+function initClock() {
     setInterval(() => {
-
         const el = document.getElementById('clock');
-
-        if (el) {
-
-            el.innerText = new Date().toLocaleTimeString('en-US', { hour12: false });
-
-        }
-
+        if (el) el.innerText = new Date().toLocaleTimeString('en-US', { hour12: false });
     }, 1000);
-
 }
 
+function initMap() {
+    // Ensuring the map div exists before loading
+    const mapDiv = document.getElementById('map');
+    if (mapDiv) {
+        map = L.map('map').setView([25.7617, -80.1918], 12); 
+        L.tileLayer('https://{s}.basemaps.cartocdn.com/dark_all/{z}/{x}/{y}{r}.png', {
+            attribution: '© OpenStreetMap'
+        }).addTo(map);
+    }
+}
 
+function setupEventListeners() {
+    // Manual Flight Form Submission
+    const form = document.getElementById('manual-flight-form');
+    if (form) {
+        form.addEventListener('submit', async (e) => {
+            e.preventDefault();
+            const payload = {
+                id: `M-${Date.now()}`,
+                flight: document.getElementById('m-flight').value,
+                arrival_time: document.getElementById('m-arrival').value,
+                date: document.getElementById('m-date').value,
+                ride_no: `MAN-${Math.floor(Math.random() * 9000)}`,
+                terminal: document.getElementById('m-term').value || "TBD",
+                gate: document.getElementById('m-gate').value || "TBD",
+                status: "SCHEDULED"
+            };
 
-async function fetchFlights(targetDate = "ALL") {
-
-    try {
-
-        const res = await fetch(`${API_BASE}/api/flights?date=${targetDate}`);
-
-        const data = await res.json();
-
-        renderDashboard(data);
-
-    } catch (e) {
-
-        console.error("Connection to API failed.");
-
+            try {
+                const token = getAuthToken();
+                const res = await fetch(`${API_BASE}/api/add_manual?token=${token}`, {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify(payload)
+                });
+                if (!res.ok) {
+                    let errText = res.statusText;
+                    try {
+                        const errJson = await res.json();
+                        errText = errJson.detail || errText;
+                    } catch (e) {
+                        // If not JSON
+                    }
+                    throw new Error(errText);
+                }
+                document.getElementById('manual-modal-v3').style.display = 'none';
+                form.reset();
+                fetchFlights("ALL");
+            } catch (err) {
+                console.error("Submission failed", err);
+                alert("Add flight failed: " + err.message);
+            }
+        });
     }
 
+    // Date Picker
+    const datePicker = document.getElementById('date-picker');
+    if (datePicker) {
+        datePicker.addEventListener('change', () => {
+            const selectedDate = datePicker.value;
+            if (selectedDate) {
+                fetchFlights(selectedDate);
+            } else {
+                fetchFlights("ALL");
+            }
+        });
+    }
 }
 
-
+async function fetchFlights(date = "ALL") {
+    const panel = document.getElementById('data-panel');
+    if (panel) panel.classList.add('loading');
+    try {
+        const token = requireAuth();
+        if (!token) return;
+        const res = await fetch(`${API_BASE}/api/flights?date=${date}&token=${token}`);
+        if (!res.ok) {
+            let errText = res.statusText;
+            try {
+                const errJson = await res.json();
+                errText = errJson.detail || errText;
+            } catch (e) {
+                // If not JSON, use statusText
+            }
+            throw new Error(errText);
+        }
+        const data = await res.json();
+        renderDashboard(data);
+    } catch (err) {
+        console.error("Connection to API failed.", err);
+        alert("Flight load failed: " + err.message);
+    } finally {
+        if (panel) panel.classList.remove('loading');
+    }
+}
 
 function renderDashboard(rides) {
-
     const panel = document.getElementById('data-panel');
-
     if (!panel) return;
-
     panel.innerHTML = '';
 
-
-
-    if (!rides || rides.length === 0) {
-
-        panel.innerHTML = `
-
-            <div style="padding:40px; text-align:center; color:#888; border:2px dashed #333; border-radius:15px; margin:20px;">
-
-                No ARRIVAL flights found. <br>
-
-                <small>Ensure the PDF contains "Run Type: ARRIVAL".</small>
-
-            </div>`;
-
-        return;
-
-    }
-
-
-
-    // Organize by Date for better UI grouping
-
     const grouped = {};
-
     rides.forEach(r => {
-
         if (!grouped[r.date]) grouped[r.date] = [];
-
         grouped[r.date].push(r);
-
     });
 
-
-
-    for (const [date, flightList] of Object.entries(grouped)) {
-
-        const section = document.createElement('div');
-
-        section.className = 'station-block';
-
-        section.innerHTML = `
-
-            <div class="station-header" style="display:flex; justify-content:space-between; align-items:center;">
-
-                <div class="station-title">📅 Date: ${date}</div>
-
-                <div style="font-size:0.8rem; color:#10ffbe;">${flightList.length} Arrivals</div>
-
-            </div>
-
-            <div class="flight-list"></div>
-
-        `;
-
-        panel.appendChild(section);
-
-
-
-        const list = section.querySelector('.flight-list');
-
-
-
-        flightList.forEach(ride => {
-
+    for (const [date, list] of Object.entries(grouped)) {
+        const block = document.createElement('div');
+        block.className = 'station-block';
+        block.innerHTML = `<div class="station-header">📅 ${date}</div><div class="flight-list"></div>`;
+        
+        list.forEach(ride => {
             const card = document.createElement('div');
-
             card.className = 'flight-card search-target';
-
-            card.setAttribute('data-search', `${ride.flight} ${ride.passenger}`.toLowerCase());
-
-
-
-            // RESTORED ORIGINAL COMPLEX LAYOUT
-
             card.innerHTML = `
-
-                <div style="padding: 15px;">
-
-                    <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:12px;">
-
-                        <span style="font-weight:800; color:var(--accent); font-size:1.1rem;">✈️ ${ride.flight}</span>
-
-                        <span style="font-size:0.7rem; color:#888; background:#222; padding:2px 6px; border-radius:4px;">RID# ${ride.ride_no}</span>
-
+                <div style="padding:15px;">
+                    <div style="display:flex; justify-content:space-between; align-items:center;">
+                        <span style="color:#10ffbe; font-weight:800; font-size:1.1rem;">✈️ ${ride.flight}</span>
+                        <span style="color:#666; font-size:0.75rem;">#${ride.ride_no}</span>
                     </div>
-
-                   
-
-                   
-
-                   
-
-                    <div style="display:grid; grid-template-columns: 1fr 1fr; gap:10px; margin-bottom:12px; border-top:1px solid #333; padding-top:10px;">
-
-                        <div>
-
-                            <div style="font-size:0.65rem; color:#888; text-transform:uppercase;">Arrival Time</div>
-
-                            <div style="font-size:0.9rem; color:#fff; font-weight:bold;">🕒 ${ride.arrival_time}</div>
-
-                        </div>
-
-                        <div>
-
-                            <div style="font-size:0.65rem; color:#888; text-transform:uppercase;">Run Type</div>
-
-                            <div style="font-size:0.8rem; color:#10ffbe; font-weight:bold;">${ride.run_type}</div>
-
-                        </div>
-
+                    <div style="margin:10px 0;">Arrival: ${ride.arrival_time}</div>
+                    <div style="display:grid; grid-template-columns:1fr 1fr; font-size:0.7rem; color:#888; border-top:1px solid #222; padding-top:8px;">
+                        <span>Term: ${ride.terminal}</span>
+                        <span>Gate: ${ride.gate}</span>
                     </div>
-
-                   
-
-                    <div style="display:flex; align-items:center; gap:6px; margin-top:5px;">
-
-                        <div style="width:8px; height:8px; background:#10ffbe; border-radius:50%; box-shadow: 0 0 8px #10ffbe;"></div>
-
-                        <span style="font-size:0.7rem; color:#10ffbe; font-weight:700; text-transform:uppercase;">${ride.status}</span>
-
-                    </div>
-
-                </div>
-
-            `;
-
-            list.appendChild(card);
-
+                    <div style="margin-top:5px; color:#10ffbe; font-weight:bold; font-size:0.65rem;">STATUS: ${ride.status}</div>
+                </div>`;
+            card.addEventListener('click', () => showFlightDetails(ride));
+            block.querySelector('.flight-list').appendChild(card);
         });
-
+        panel.appendChild(block);
     }
-
 }
-
-
 
 async function forceScan() {
-
     const status = document.getElementById('scan-status');
-
-    if (status) status.innerText = "⚡ Analyzing PDF Blocks...";
-
-   
-
-    try {
-
-        const res = await fetch(`${API_BASE}/api/scan_manifests`, { method: 'POST' });
-
-        const result = await res.json();
-
-       
-
-        if (status) status.innerText = `✅ Success: ${result.added} Arrivals Stored.`;
-
-       
-
-        // Show all results immediately
-
-        fetchFlights("ALL");
-
-    } catch (err) {
-
-        if (status) status.innerText = "❌ Scan Failed.";
-
-    }
-
+    if (!requireAuth()) return;
+    if (status) status.innerText = "⚡ Scanning...";
+    const token = getAuthToken();
+    await fetch(`${API_BASE}/api/scan_manifests?token=${token}`, { method: 'POST' });
+    if (status) status.innerText = "✅ Updated";
+    fetchFlights("ALL");
 }
-
-
 
 function filterSearch() {
-
-    const query = document.getElementById('search-bar').value.toLowerCase();
-
-    document.querySelectorAll('.search-target').forEach(card => {
-
-        const content = card.getAttribute('data-search');
-
-        card.style.display = content.includes(query) ? 'block' : 'none';
-
+    const q = document.getElementById('search-bar').value.toLowerCase();
+    document.querySelectorAll('.search-target').forEach(c => {
+        const text = c.innerText.toLowerCase();
+        c.style.display = text.includes(q) ? 'block' : 'none';
     });
-
 }
 
+function logout() {
+    localStorage.removeItem('ridecentric_token');
+    window.location.href = '/app/login.html';
+}
+
+function showAllFlights() {
+    const datePicker = document.getElementById('date-picker');
+    if (datePicker) datePicker.value = '';
+    fetchFlights("ALL");
+}
+
+function showFlightDetails(ride) {
+    const modal = document.getElementById('flight-details-modal');
+    if (!modal) return;
+    modal.querySelector('.detail-flight').innerText = ride.flight;
+    modal.querySelector('.detail-ride').innerText = ride.ride_no;
+    modal.querySelector('.detail-date').innerText = ride.date;
+    modal.querySelector('.detail-arrival').innerText = ride.arrival_time;
+    modal.querySelector('.detail-terminal').innerText = ride.terminal;
+    modal.querySelector('.detail-gate').innerText = ride.gate;
+    modal.querySelector('.detail-status').innerText = ride.status;
+    modal.querySelector('.detail-passenger').innerText = ride.passenger || 'N/A';
+    modal.style.display = 'flex';
+}
+
+function closeFlightDetails() {
+    const modal = document.getElementById('flight-details-modal');
+    if (modal) modal.style.display = 'none';
+}

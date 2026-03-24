@@ -1,107 +1,198 @@
-import os, re, json
-from datetime import datetime
-from pathlib import Path
-from fastapi import FastAPI
-from fastapi.staticfiles import StaticFiles
-from fastapi.responses import FileResponse
-from fastapi.middleware.cors import CORSMiddleware
+import json
+import os
+import re
 import pdfplumber
-import uvicorn
+from datetime import datetime
+from fastapi import FastAPI, HTTPException, Query, Body
+from fastapi.middleware.cors import CORSMiddleware
+from fastapi.staticfiles import StaticFiles
+from pydantic import BaseModel
+from typing import List, Optional
 
-app = FastAPI()
+app = FastAPI(title="RideCentric Dispatch API")
 
-BASE_DIR = Path(__file__).parent
-MANIFEST_DIR = BASE_DIR / "manifests"
-FRONTEND_DIR = BASE_DIR / "Frontend"
-DB_FILE = BASE_DIR / "database.json"
-os.makedirs(MANIFEST_DIR, exist_ok=True)
+# Serve your frontend from the same backend host
+app.mount("/app", StaticFiles(directory="Frontend", html=True), name="dashboard")
 
-app.add_middleware(CORSMiddleware, allow_origins=["*"], allow_methods=["*"], allow_headers=["*"])
+# Ensure your frontend can communicate with the backend
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=["*"],
+    allow_credentials=True,
+    allow_methods=["*"],
+    allow_headers=["*"],
+)
 
-def load_db():
-    if DB_FILE.exists():
-        with open(DB_FILE, "r") as f:
-            try: return json.load(f)
-            except: return []
-    return []
+DB_FILE = 'database.json'
+MANIFEST_DIR = 'manifests'
+USERS_FILE = 'users.json'
 
-def save_db(data):
-    with open(DB_FILE, "w") as f:
+# Simple in-memory token store (session tokens)
+SESSIONS = {}
+
+class FlightEntry(BaseModel):
+    id: str
+    flight: str
+    arrival_time: str
+    date: str
+    passenger: Optional[str] = "N/A"
+    ride_no: str
+    terminal: Optional[str] = "TBD"
+    gate: Optional[str] = "TBD"
+    status: str = "SCHEDULED"
+    run_type: str = "ARRIVAL"
+
+class UserCredentials(BaseModel):
+    username: str = ""
+    password: str = ""
+
+def load_db() -> List[dict]:
+    if not os.path.exists(DB_FILE):
+        return []
+    with open(DB_FILE, 'r') as f:
+        try:
+            return json.load(f)
+        except json.JSONDecodeError:
+            return []
+
+def save_db(data: List[dict]):
+    with open(DB_FILE, 'w') as f:
         json.dump(data, f, indent=4)
 
-def parse_pdf(path):
-    extracted_data = []
-    try:
-        with pdfplumber.open(path) as pdf:
-            for page in pdf.pages:
-                text = page.extract_text()
-                if not text: continue
-                
-                # Split by "Account:" to separate each ride record
-                blocks = text.split("Account:")
-                for block in blocks:
-                    if not block.strip(): continue
-                    
-                    # --- EXTRACTION LOGIC ---
-                    # 1. Run Type (Check if Arrival)
-                    run_type_match = re.search(r'Run Type:\s*(\w+)', block, re.I)
-                    run_type = run_type_match.group(1).upper() if run_type_match else "UNKNOWN"
-                    
-                    # ONLY PROCESS ARRIVALS (As requested)
-                    if run_type != "ARRIVAL":
-                        continue
+# user store utilities
+def load_users() -> List[dict]:
+    if not os.path.exists(USERS_FILE):
+        return []
+    with open(USERS_FILE, 'r') as f:
+        try:
+            return json.load(f)
+        except json.JSONDecodeError:
+            return []
 
-                    # 2. Passenger Name
-                    pass_match = re.search(r'Passenger:\s*([^\n]+)', block)
-                    passenger = pass_match.group(1).strip() if pass_match else "Unknown"
+def save_users(users: List[dict]):
+    with open(USERS_FILE, 'w') as f:
+        json.dump(users, f, indent=4)
 
-                    # 3. Pickup Date & Time
-                    pickup_match = re.search(r'Pickup:\s*(\d{2}/\d{2}/\d{4})\s*(\d{2}:\d{2})', block)
-                    p_date = pickup_match.group(1) if pickup_match else "03/05/2026"
-                    p_time = pickup_match.group(2) if pickup_match else "00:00"
+def hash_password(password: str) -> str:
+    import hashlib
+    return hashlib.sha256(password.encode('utf-8')).hexdigest()
 
-                    # 4. Flight Number
-                    flight_match = re.search(r'Flight\s*([A-Z0-9\s]+)', block)
-                    flight_no = flight_match.group(1).strip() if flight_match else "TBD"
-
-                    # 5. Ride Number
-                    ride_match = re.search(r'Ride #:\s*(\d+)', block)
-                    ride_no = ride_match.group(1) if ride_match else "N/A"
-
-                    # Format for Database
-                    extracted_data.append({
-                        "id": f"RIDE-{ride_no}-{datetime.now().timestamp()}",
-                        "passenger": passenger,
-                        "flight": flight_no,
-                        "arrival_time": p_time,
-                        "date": datetime.strptime(p_date, "%m/%d/%Y").strftime("%Y-%m-%d"),
-                        "run_type": run_type,
-                        "ride_no": ride_no,
-                        "status": "ARRIVING"
-                    })
-        print(f"✅ Extracted {len(extracted_data)} ARRIVAL records.")
-    except Exception as e:
-        print(f"❌ Error: {e}")
-    return extracted_data
+def verify_password(password: str, stored: str) -> bool:
+    return hash_password(password) == stored
 
 @app.get("/api/flights")
-async def get_flights(date: str = "ALL"):
+async def get_flights(date: str = "ALL", token: Optional[str] = Query(None)):
+    require_token(token)
     db = load_db()
-    if date and date != "ALL":
-        return [f for f in db if f["date"] == date]
-    return db
+    if date == "ALL":
+        return db
+    return [r for r in db if r.get('date') == date]
+
+# authentication helpers
+
+def require_token(token: Optional[str]):
+    if not token or token not in SESSIONS:
+        raise HTTPException(status_code=401, detail="Invalid or missing auth token")
+    return SESSIONS[token]
+
+@app.post('/api/signup')
+async def signup(credentials: UserCredentials):
+    username = credentials.username.strip()
+    password = credentials.password.strip()
+    if not username or not password:
+        raise HTTPException(status_code=400, detail='Username and password required')
+    users = load_users()
+    if any(u['username'] == username for u in users):
+        raise HTTPException(status_code=400, detail='Username already exists')
+    users.append({'username': username, 'password': hash_password(password)})
+    save_users(users)
+    return {'status': 'success', 'message': 'User created'}
+
+@app.post('/api/login')
+async def login(credentials: UserCredentials):
+    username = credentials.username.strip()
+    password = credentials.password.strip()
+    if not username or not password:
+        raise HTTPException(status_code=400, detail='Username and password required')
+    users = load_users()
+    user = next((u for u in users if u['username'] == username), None)
+    if not user or not verify_password(password, user['password']):
+        raise HTTPException(status_code=401, detail='Invalid username or password')
+    token = os.urandom(24).hex()
+    SESSIONS[token] = {'username': username, 'iat': datetime.now().isoformat()}
+    return {'status': 'success', 'token': token}
+
+@app.post('/signup')
+async def signup_alias(credentials: UserCredentials):
+    return await signup(credentials)
+
+@app.get('/api/flights')
+async def get_flights(date: str = "ALL", token: Optional[str] = Query(None)):
+    require_token(token)
+    db = load_db()
+    if date == "ALL":
+        return db
+    return [r for r in db if r.get('date') == date]
+
+@app.get('/flights')
+async def get_flights_alias(date: str = "ALL", token: Optional[str] = Query(None)):
+    return await get_flights(date, token)
+
+@app.post('/api/add_manual')
+async def add_manual(entry: FlightEntry, token: Optional[str] = Query(None)):
+    require_token(token)
+    db = load_db()
+    # Check for duplicates
+    if any(item['ride_no'] == entry.ride_no and item['date'] == entry.date for item in db):
+        raise HTTPException(status_code=400, detail="Flight already exists")
+    
+    db.append(entry.dict())
+    save_db(db)
+    return {"status": "success", "added": entry.flight}
 
 @app.post("/api/scan_manifests")
-async def scan_manifests():
-    all_rides = []
-    for pdf in list(MANIFEST_DIR.glob("*.pdf")):
-        all_rides.extend(parse_pdf(pdf))
-    save_db(all_rides)
-    return {"added": len(all_rides)}
+async def scan_manifests(token: Optional[str] = Query(None)):
+    require_token(token)
+    if not os.path.exists(MANIFEST_DIR):
+        os.makedirs(MANIFEST_DIR)
+        return {"status": "error", "message": "Manifests folder created. Please add PDFs."}
 
-@app.get("/")
-async def root(): return FileResponse(FRONTEND_DIR / "dashboard.html")
-app.mount("/", StaticFiles(directory=str(FRONTEND_DIR)), name="static")
+    db = load_db()
+    new_count = 0
+    
+    for filename in os.listdir(MANIFEST_DIR):
+        if filename.endswith(".pdf"):
+            path = os.path.join(MANIFEST_DIR, filename)
+            with pdfplumber.open(path) as pdf:
+                full_text = "".join([page.extract_text() or "" for page in pdf.pages])
+                
+                # YOUR ORIGINAL PARSING LOGIC (Regex)
+                # This matches Ride #, Flight, and Time
+                matches = re.findall(r"Ride #:\s*(\d+).*?Flight:\s*([A-Z0-9 ]+).*?Arrival:\s*(\d{2}:\d{2})", full_text, re.S)
+                
+                for r_no, fl, tm in matches:
+                    if not any(x['ride_no'] == r_no for x in db):
+                        db.append({
+                            "id": f"PDF-{r_no}",
+                            "flight": fl.strip(),
+                            "arrival_time": tm,
+                            "date": datetime.now().strftime("%Y-%m-%d"),
+                            "ride_no": r_no,
+                            "passenger": "REDACTED",
+                            "terminal": "TBD",
+                            "gate": "TBD",
+                            "status": "ARRIVING",
+                            "run_type": "ARRIVAL"
+                        })
+                        new_count += 1
+    
+    save_db(db)
+    return {"status": "success", "added": new_count}
+
+@app.post('/scan_manifests')
+async def scan_manifests_alias(token: Optional[str] = Query(None)):
+    return await scan_manifests(token)
 
 if __name__ == "__main__":
-    uvicorn.run(app, host="127.0.0.1", port=8000)
+    import uvicorn
+    uvicorn.run(app, host="0.0.0.0", port=8000)

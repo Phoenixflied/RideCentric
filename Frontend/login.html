@@ -2,52 +2,70 @@
 <html lang="en">
 <head>
     <meta charset="UTF-8">
-    <title>RideCentric LIVE | Dispatch Login</title>
+    <title>RideCentric LIVE | Dispatch Access</title>
     <link href="https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;600;800&display=swap" rel="stylesheet">
-    <link rel="stylesheet" href="style.css">
+    <link rel="stylesheet" href="/app/style.css">
     <style>
         body { justify-content: center; align-items: center; background: #070a12; }
-        .login-box { 
+        .auth-container { display: flex; gap: 30px; justify-content: center; align-items: flex-start; flex-wrap: wrap; }
+        .login-box, .signup-box { 
             background: rgba(15, 23, 42, 0.85); padding: 40px; border-radius: 15px; 
-            border: 1px solid rgba(255, 255, 255, 0.1); width: 350px; text-align: center; 
+            border: 1px solid rgba(255, 255, 255, 0.1); width: 320px; text-align: center; 
             box-shadow: 0 10px 30px rgba(0,0,0,0.5); backdrop-filter: blur(15px);
+            animation: fadeInUp 0.5s ease-out;
         }
-        .login-box h1 { color: #4977ff; margin-top: 0; font-size: 2rem; letter-spacing: -1px; }
-        .login-box input { 
+        @keyframes fadeInUp {
+            from { transform: translateY(20px); opacity: 0; }
+            to { transform: translateY(0); opacity: 1; }
+        }
+        .login-box h1, .signup-box h1 { color: #4977ff; margin-top: 0; font-size: 1.8rem; letter-spacing: -1px; }
+        .login-box input, .signup-box input { 
             width: 85%; margin-bottom: 15px; padding: 12px; border-radius: 8px; 
             font-family: 'JetBrains Mono', monospace; background: rgba(0,0,0,0.5); 
             border: 1px solid rgba(255, 255, 255, 0.1); color: white; outline: none; transition: 0.2s;
         }
-        .login-box input:focus { border-color: #4977ff; }
-        .login-box button { width: 95%; padding: 12px; font-size: 1rem; margin-top: 10px; }
-        #error-msg { color: #ef4444; font-size: 0.85rem; margin-top: 15px; min-height: 20px; font-weight: 600;}
+        .login-box input:focus, .signup-box input:focus { border-color: #4977ff; }
+        .login-box button, .signup-box button { width: 95%; padding: 12px; font-size: 1rem; margin-top: 10px; }
+        .error-msg { color: #ef4444; font-size: 0.85rem; margin-top: 15px; min-height: 20px; font-weight: 600;}
     </style>
 </head>
 <body>
-    <div class="login-box">
-        <h1>RideCentric</h1>
-        <p style="color: #94a3b8; margin-bottom: 25px; margin-top: -10px; font-weight: 600;">System Access</p>
-        
-        <input type="text" id="username" placeholder="Username">
-        <input type="password" id="password" placeholder="Password">
-        
-        <button class="btn btn-primary" onclick="attemptLogin()">Login</button>
-        <div id="error-msg"></div>
+    <div class="auth-container">
+        <div class="login-box">
+            <h1>Login</h1>
+            <p style="color: #94a3b8; margin-bottom: 25px; margin-top: -10px; font-weight: 600;">Existing User</p>
+            
+            <input type="text" id="login-username" placeholder="Username">
+            <input type="password" id="login-password" placeholder="Password">
+            
+            <button class="btn btn-primary" onclick="attemptLogin()">Login</button>
+            <div id="login-error-msg" class="error-msg"></div>
+        </div>
+
+        <div class="signup-box">
+            <h1>Sign Up</h1>
+            <p style="color: #94a3b8; margin-bottom: 25px; margin-top: -10px; font-weight: 600;">New User</p>
+            
+            <input type="text" id="signup-username" placeholder="Username">
+            <input type="password" id="signup-password" placeholder="Password">
+            
+            <button class="btn btn-secondary" onclick="attemptSignUp()">Sign Up</button>
+            <div id="signup-error-msg" class="error-msg"></div>
+        </div>
     </div>
 
     <script>
         // Send user straight to dashboard if they are already logged in
-        if (localStorage.getItem('ridecentric_token')) window.location.href = 'dashboard.html';
+        if (localStorage.getItem('ridecentric_token')) window.location.href = '/app/dashboard.html';
 
         async function attemptLogin() {
-            const u = document.getElementById('username').value;
-            const p = document.getElementById('password').value;
-            const err = document.getElementById('error-msg');
+            const u = (document.getElementById('login-username') || { value: '' }).value;
+            const p = (document.getElementById('login-password') || { value: '' }).value;
+            const err = document.getElementById('login-error-msg');
             err.innerText = "Authenticating...";
 
             try {
-                // FIXED: Uses 127.0.0.1 to perfectly match the backend terminal
-                const res = await fetch('http://127.0.0.1:8000/login', {
+                const res = await fetch('/api/login', {
                     method: 'POST',
                     headers: { 'Content-Type': 'application/json' },
                     body: JSON.stringify({ username: u, password: p })
@@ -56,18 +74,58 @@
                 if (res.ok) {
                     const data = await res.json();
                     localStorage.setItem('ridecentric_token', data.token);
-                    window.location.href = 'dashboard.html';
+                    window.location.href = '/app/dashboard.html';
                 } else {
-                    err.innerText = "✕ Invalid credentials.";
+                    const body = await res.json();
+                    if (Array.isArray(body.detail)) {
+                        err.innerText = body.detail.map(d => d.msg).join(', ');
+                    } else {
+                        err.innerText = body.detail || 'Login failed';
+                    }
                 }
             } catch (e) {
                 err.innerText = "✕ System offline. Check backend terminal.";
             }
         }
-        
-        // Allow hitting "Enter" to login
+
+        async function attemptSignUp() {
+            const u = (document.getElementById('signup-username') || { value: '' }).value;
+            const p = (document.getElementById('signup-password') || { value: '' }).value;
+            const err = document.getElementById('signup-error-msg');
+            err.innerText = "Creating user...";
+
+            try {
+                const res = await fetch('/api/signup', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ username: u, password: p })
+                });
+
+                if (res.ok) {
+                    err.innerText = "✓ User created, now login";
+                } else {
+                    const body = await res.json();
+                    if (Array.isArray(body.detail)) {
+                        err.innerText = body.detail.map(d => d.msg).join(', ');
+                    } else {
+                        err.innerText = body.detail || 'Sign-up failed';
+                    }
+                }
+            } catch (e) {
+                err.innerText = "✕ System offline. Check backend terminal.";
+            }
+        }
+
+        // Allow hitting "Enter" to login from login inputs
         document.addEventListener("keyup", function(event) {
-            if (event.key === "Enter") attemptLogin();
+            if (event.key === "Enter") {
+                const activeElement = document.activeElement;
+                if (activeElement.id === 'login-username' || activeElement.id === 'login-password') {
+                    attemptLogin();
+                } else if (activeElement.id === 'signup-username' || activeElement.id === 'signup-password') {
+                    attemptSignUp();
+                }
+            }
         });
     </script>
 </body>
