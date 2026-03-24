@@ -165,13 +165,53 @@ function renderDashboard(rides) {
 }
 
 async function forceScan() {
-    const status = document.getElementById('scan-status');
+    const statusEl = document.getElementById('scan-status');
+    const scanBtn = document.getElementById('scan-btn');
+    
     if (!requireAuth()) return;
-    if (status) status.innerText = "⚡ Scanning...";
-    const token = getAuthToken();
-    await fetch(`${API_BASE}/api/scan_manifests?token=${token}`, { method: 'POST' });
-    if (status) status.innerText = "✅ Updated";
-    fetchFlights("ALL");
+    
+    // Disable button and show loading state
+    scanBtn.disabled = true;
+    scanBtn.innerText = "⏳ Scanning...";
+    if (statusEl) statusEl.innerText = "Processing PDFs...";
+    
+    try {
+        const token = getAuthToken();
+        const response = await fetch(`${API_BASE}/api/scan_manifests?token=${token}`, { method: 'POST' });
+        
+        if (!response.ok) {
+            const errorData = await response.json().catch(() => ({ message: 'Unknown error' }));
+            throw new Error(errorData.message || `HTTP ${response.status}`);
+        }
+        
+        const result = await response.json();
+        
+        if (result.status === 'success') {
+            const addedCount = result.added || 0;
+            if (addedCount > 0) {
+                if (statusEl) statusEl.innerText = `✅ Added ${addedCount} new flights`;
+                fetchFlights("ALL"); // Refresh the flight list
+            } else {
+                if (statusEl) statusEl.innerText = `ℹ️ No new flights found`;
+            }
+        } else {
+            if (statusEl) statusEl.innerText = `⚠️ ${result.message || 'Scan completed with issues'}`;
+        }
+        
+    } catch (error) {
+        console.error('Scan failed:', error);
+        if (statusEl) statusEl.innerText = `❌ Scan failed: ${error.message}`;
+        alert(`PDF scan failed: ${error.message}`);
+    } finally {
+        // Re-enable button and reset text
+        scanBtn.disabled = false;
+        scanBtn.innerText = "🔄 Scan PDF";
+        
+        // Clear status after 5 seconds
+        setTimeout(() => {
+            if (statusEl) statusEl.innerText = "";
+        }, 5000);
+    }
 }
 
 function filterSearch() {
