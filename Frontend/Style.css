@@ -162,6 +162,7 @@ table.grid { border-collapse: separate; border-spacing: 0; width: 100%; min-widt
 .apistate { margin-top: 16px; display: flex; align-items: center; gap: 8px; font-weight: 600; flex-wrap: wrap; }
 .apistate .tbtn { margin-left: auto; }
 .apistate .pill { text-transform: none; }
+.apihint { margin-top: 8px; color: var(--muted); font-size: 10.5px; line-height: 1.5; }
 .placeholder { text-align: center; color: var(--muted); padding: 30px 10px 26px; line-height: 1.6; }
 .placeholder .big { font-size: 30px; display: block; margin-bottom: 6px; }
 
