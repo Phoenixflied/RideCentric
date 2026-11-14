@@ -1,0 +1,14 @@
+# --- secrets and local data: never commit these ---------------------------
+.env
+users.json
+database.json
+flights.db
+backup1
+manifests/*.pdf
+!manifests/.gitkeep
+
+# --- python -----------------------------------------------------------------
+__pycache__/
+*.pyc
+.venv/
+venv/

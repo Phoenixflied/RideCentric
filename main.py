@@ -1,6 +1,7 @@
 import json
 import os
 import re
+import sys
 import pdfplumber
 from datetime import datetime
 from fastapi import FastAPI, HTTPException, Query, Body
@@ -8,6 +9,13 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
 from typing import List, Optional
+
+BASE_DIR = os.path.dirname(os.path.abspath(__file__))
+os.chdir(BASE_DIR)  # data files, manifests/ and Frontend/ are found next to main.py wherever the server is started from
+sys.path.insert(0, BASE_DIR)
+
+import live  # noqa: E402  (live flight lookup; reads FLIGHT_API_KEY from .env)
+live.load_env(os.path.join(BASE_DIR, ".env"))
 
 app = FastAPI(title="RideCentric Dispatch API")
 
@@ -137,6 +145,13 @@ async def get_flights(date: str = "ALL", token: Optional[str] = Query(None)):
 @app.get('/flights')
 async def get_flights_alias(date: str = "ALL", token: Optional[str] = Query(None)):
     return await get_flights(date, token)
+
+@app.get('/api/live')
+def live_flight(flight: str, date: Optional[str] = None, token: Optional[str] = Query(None)):
+    """Live status of one flight. Looked up here so the airline API key never reaches the browser.
+    (A plain `def` on purpose: FastAPI runs it in a worker thread, so the web request to AirLabs does not block the server.)"""
+    require_token(token)
+    return live.lookup(flight, date)
 
 @app.post('/api/add_manual')
 async def add_manual(entry: FlightEntry, token: Optional[str] = Query(None)):

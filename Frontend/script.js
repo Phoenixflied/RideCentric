@@ -438,8 +438,11 @@ function renderTable() {
         body += `<tr class="row${selectedId === r.id ? ' sel' : ''}" data-id="${esc(r.id)}" tabindex="0">` +
             COLS.map((c) => `<td${c.cell ? ' class="cell-t"' : ''}>${c.td(r)}</td>`).join('') + '</tr>';
     });
+    const emptyMsg = rides.length === 0 && S.date === 'ALL'
+        ? 'No flights yet. Put manifest PDFs in the manifests folder and press “Scan PDF”, or use “+ Add flight”.'
+        : 'No flights match. Try another date, status or search.';
     $('grid').querySelector('tbody').innerHTML = body ||
-        `<tr><td class="empty" colspan="${COLS.length}">No flights match. Try another date, status or search.</td></tr>`;
+        `<tr><td class="empty" colspan="${COLS.length}">${emptyMsg}</td></tr>`;
     $('foot').textContent = list.length
         ? `Showing ${list.length} of ${rides.length} flight${rides.length === 1 ? '' : 's'}${S.date === 'ALL' ? '' : ' on ' + S.date}`
         : 'Showing 0 flights';
@@ -559,6 +562,7 @@ function renderDetail() {
         c.innerHTML = '<div class="dtitle">Flight details</div><div class="placeholder"><span class="big">✈️</span>Select a flight from the list<br>to see its details and live status.</div>';
         return;
     }
+    const ld = (live.id === r.id && live.data) || {};   // live data for this flight (may be empty)
     let liveHtml;
     if (live.id === r.id && live.loading) {
         liveHtml = '<span class="muted">Loading…</span>';
@@ -576,109 +580,30 @@ function renderDetail() {
         `<div class="d-chips"><span class="pill st-${esc(r.statusSlug)}">${esc(r.status)}</span></div>` +
         '<div class="facts">' +
         fact('Date', r.date) + fact('Arrival', r.arrival_time || '—') + fact('Ride #', r.ride_no) +
-        fact('Terminal', r.terminal) + fact('Gate', r.gate) + fact('Type', r.run_type) +
-        fact('Passenger', r.passenger) + '</div>' +
-        `<div class="apistate"><span class="muted">Live status</span>${liveHtml}</div>`;
+        fact('Terminal', ld.terminal && r.terminal === 'TBD' ? ld.terminal : r.terminal) +
+        fact('Gate', ld.gate && r.gate === 'TBD' ? ld.gate : r.gate) + fact('Type', r.run_type) +
+        fact('Passenger', r.passenger) +
+        (ld.eta ? fact('ETA', ld.eta) : '') + (ld.baggage ? fact('Baggage', ld.baggage) : '') + (ld.aircraft ? fact('Aircraft', ld.aircraft) : '') +
+        '</div>' +
+        `<div class="apistate"><span class="muted">Live status</span>${liveHtml}</div>` +
+        (ld.detail ? `<div class="apihint">${esc(ld.detail)}</div>` : '');
 }
 
 // =============================================================================
-// AIRLINE API CONFIGURATION - UPDATE THESE VALUES FOR YOUR AIRLINE API
+// LIVE FLIGHT STATUS
 // =============================================================================
-// Replace the values below with your actual airline API credentials and endpoints
-// Common airline APIs: FlightAware, FlightStats, ADS-B Exchange, etc.
-
-const AIRLINE_API_CONFIG = {
-    baseUrl: 'https://api.flightaware.com/v3', // Your airline API base URL
-    apiKey: 'YOUR_AIRLINE_API_KEY_HERE', // Your actual API key from the airline
-    endpoints: {
-        flightInfo: '/flights/{flightNumber}', // API endpoint pattern for flight info
-        flightMap: '/flights/{flightNumber}/map' // API endpoint pattern for flight map (if separate)
-    }
-};
-
-// =============================================================================
+// Looked up by the backend (live.py) with the airline API key from the server's .env file,
+// so the key never reaches the browser.
 
 async function fetchLiveFlightData(flightNumber, date) {
+    const path = `/api/live?flight=${encodeURIComponent(flightNumber)}&date=${encodeURIComponent(date || '')}`;
     try {
-        const { baseUrl, apiKey, endpoints } = AIRLINE_API_CONFIG;
-
-        // Clean flight number (remove any prefixes/suffixes if needed)
-        const cleanFlightNumber = flightNumber.replace(/[^A-Z0-9]/g, '');
-
-        // Build API URL - adjust parameters based on your airline API
-        const apiUrl = `${baseUrl}${endpoints.flightInfo.replace('{flightNumber}', cleanFlightNumber)}`;
-
-        const response = await fetch(apiUrl, {
-            method: 'GET',
-            headers: {
-                'x-apiKey': apiKey, // Common header for airline APIs
-                'Content-Type': 'application/json'
-                // Add other required headers here
-            }
-        });
-
-        if (!response.ok) {
-            if (response.status === 404) {
-                return { status: 'Flight not found', map_url: null };
-            }
-            throw new Error(`API request failed: ${response.status}`);
-        }
-
-        const data = await response.json();
-
-        // Parse airline API response - adjust these mappings based on your API's response structure
-        let status = 'Unknown';
-        let mapUrl = null;
-
-        // Example mappings for common airline APIs:
-        if (data.flights && data.flights.length > 0) {
-            const flight = data.flights[0];
-
-            // Status mapping (adjust based on your API's status values)
-            if (flight.status) {
-                switch (flight.status.toLowerCase()) {
-                    case 'on_time':
-                    case 'scheduled':
-                        status = 'On Time';
-                        break;
-                    case 'delayed':
-                        status = `Delayed ${flight.delay || ''}`.trim();
-                        break;
-                    case 'cancelled':
-                        status = 'Cancelled';
-                        break;
-                    case 'landed':
-                        status = 'Landed';
-                        break;
-                    case 'en_route':
-                    case 'airborne':
-                        status = 'In Air';
-                        break;
-                    default:
-                        status = flight.status;
-                }
-            }
-
-            // Map URL (adjust based on your API's map URL field)
-            if (flight.flightMapUrl || flight.map_url) {
-                mapUrl = flight.flightMapUrl || flight.map_url;
-            } else if (endpoints.flightMap) {
-                // If map is separate endpoint, construct URL
-                mapUrl = `${baseUrl}${endpoints.flightMap.replace('{flightNumber}', cleanFlightNumber)}`;
-            }
-        }
-
-        return {
-            status: status,
-            map_url: mapUrl
-        };
-
+        const data = await apiFetch(path);
+        // map_url is the same backend call: while the plane is airborne it also carries its position
+        return Object.assign({}, data, { map_url: data.position ? path : null });
     } catch (error) {
-        console.error('Airline API error:', error);
-        return {
-            status: 'API Error',
-            map_url: null
-        };
+        if (!error.auth) console.error('Live status error:', error);
+        return { status: 'API Error', detail: error.message, map_url: null };
     }
 }
 
@@ -710,10 +635,8 @@ async function startFlightTracking(ride, flightData) {
             return;
         }
 
-        // For airline APIs, the map_url might be a direct tracking endpoint
-        // Adjust this based on your specific airline API response
-        const trackingResponse = await fetch(flightData.map_url);
-        const trackingData = await trackingResponse.json();
+        // map_url is the backend's /api/live call, which includes the plane's position while it is airborne
+        const trackingData = await apiFetch(flightData.map_url);
 
         // Extract flight position (adjust based on your API response structure)
         const flightPosition = extractFlightPosition(trackingData);
@@ -733,7 +656,7 @@ async function startFlightTracking(ride, flightData) {
             // Start periodic updates (every 30 seconds)
             flightTrackingInterval = setInterval(async () => {
                 try {
-                    const updatedData = await fetch(flightData.map_url).then(r => r.json());
+                    const updatedData = await apiFetch(flightData.map_url);
                     const newPosition = extractFlightPosition(updatedData);
                     if (newPosition) {
                         updateFlightMarker(newPosition, ride);
