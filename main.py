@@ -103,8 +103,15 @@ def require_token(token: Optional[str]):
         raise HTTPException(status_code=401, detail="Invalid or missing auth token")
     return SESSIONS[token]
 
+def signup_allowed() -> bool:
+    # Sign-up is OFF unless the server's .env contains ALLOW_SIGNUP=1. Accounts are normally created
+    # with `python add_user.py` (see README), so strangers cannot register themselves.
+    return (os.environ.get('ALLOW_SIGNUP') or '').strip().lower() in ('1', 'true', 'yes')
+
 @app.post('/api/signup')
 async def signup(credentials: UserCredentials):
+    if not signup_allowed():
+        raise HTTPException(status_code=403, detail='Sign-up is turned off. Ask an administrator for an account.')
     username = credentials.username.strip()
     password = credentials.password.strip()
     if not username or not password:
@@ -128,7 +135,7 @@ async def login(credentials: UserCredentials):
         raise HTTPException(status_code=401, detail='Invalid username or password')
     token = os.urandom(24).hex()
     SESSIONS[token] = {'username': username, 'iat': datetime.now().isoformat()}
-    return {'status': 'success', 'token': token}
+    return {'status': 'success', 'token': token, 'username': username}
 
 @app.post('/signup')
 async def signup_alias(credentials: UserCredentials):

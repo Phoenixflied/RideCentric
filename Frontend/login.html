@@ -3,125 +3,147 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1">
-    <title>RideCentric LIVE | Dispatch Access</title>
+    <title>RideCentric LIVE | Login</title>
     <script>
         // Apply the saved theme before first paint
         try { if (localStorage.getItem('rc-theme') === 'dark') document.documentElement.setAttribute('data-theme', 'dark'); } catch (e) {}
     </script>
+    <link rel="icon" type="image/png" href="/app/img/favicon.png">
     <link href="https://fonts.googleapis.com/css2?family=Montserrat:wght@400;500;600;700&display=swap" rel="stylesheet">
     <link rel="stylesheet" href="/app/Style.css">
 </head>
-<body>
-    <div class="login-page">
-        <div class="login-brand">
-            <svg width="34" height="34" viewBox="0 0 26 26" aria-hidden="true"><rect width="26" height="26" rx="6" fill="#1fa64a"/><path d="M8 19V7h6.2a3.6 3.6 0 0 1 .4 7.2L18 19h-2.7l-3-4.7H10.4V19H8zm2.4-6.8h3.6a1.5 1.5 0 0 0 0-3h-3.6v3z" fill="#fff"/></svg>
-            <span>RideCentric</span><span class="chip-live">LIVE</span>
-        </div>
-        <div class="auth">
-            <div class="auth-box">
-                <h1>Login</h1>
-                <p class="sub">Existing User</p>
+<body class="login-body">
 
-                <label for="login-username">USERNAME</label>
-                <input type="text" id="login-username" autocomplete="username">
-                <label for="login-password">PASSWORD</label>
-                <input type="password" id="login-password" autocomplete="current-password">
-
-                <button class="go" type="button" onclick="attemptLogin()">LOGIN</button>
-                <div id="login-error-msg" class="error-msg"></div>
-            </div>
-
-            <div class="auth-box second">
-                <h1>Sign Up</h1>
-                <p class="sub">New User</p>
-
-                <label for="signup-username">USERNAME</label>
-                <input type="text" id="signup-username" autocomplete="off">
-                <label for="signup-password">PASSWORD</label>
-                <input type="password" id="signup-password" autocomplete="new-password">
-
-                <button class="go alt" type="button" onclick="attemptSignUp()">SIGN UP</button>
-                <div id="signup-error-msg" class="error-msg"></div>
-            </div>
-        </div>
+    <!-- animated background: soft colour blobs + flight routes with planes -->
+    <div class="bg" aria-hidden="true">
+        <div class="blob b1"></div><div class="blob b2"></div>
+        <svg class="routes" viewBox="0 0 1440 900" preserveAspectRatio="xMidYMid slice">
+            <defs><path id="pl" d="M0,-12 L3,-4 L12,2 L12,5 L3,3 L2,9 L5,11 L5,13 L0,12 L-5,13 L-5,11 L-2,9 L-3,3 L-12,5 L-12,2 L-3,-4 Z"/></defs>
+            <path id="r1" class="arc" d="M150 700 C 380 330, 760 250, 1120 330"/>
+            <path id="r2" class="arc" d="M1120 330 C 1250 420, 1300 600, 1230 760"/>
+            <path id="r3" class="arc" d="M150 700 C 420 880, 900 880, 1230 760"/>
+            <path id="r4" class="arc" d="M290 170 C 520 80, 880 90, 1120 330"/>
+            <path id="r5" class="arc" d="M290 170 C 190 330, 140 520, 150 700"/>
+            <g class="airports">
+                <g transform="translate(150 700)"><circle class="ring" r="9"/><circle class="ap" r="4"/><text x="-12" y="34">ORD</text></g>
+                <g transform="translate(1120 330)"><circle class="ring" r="9" style="animation-delay:-1s"/><circle class="ap" r="4"/><text x="-12" y="-26">JFK</text></g>
+                <g transform="translate(1230 760)"><circle class="ring" r="9" style="animation-delay:-2s"/><circle class="ap" r="4"/><text x="-34" y="34">MIA</text></g>
+                <g transform="translate(290 170)"><circle class="ring" r="9" style="animation-delay:-.5s"/><circle class="ap" r="4"/><text x="-12" y="-26">SEA</text></g>
+            </g>
+            <g class="planes">
+                <g class="plane"><use href="#pl" transform="rotate(90)"/><animateMotion dur="15s" repeatCount="indefinite" rotate="auto"><mpath href="#r1"/></animateMotion></g>
+                <g class="plane"><use href="#pl" transform="rotate(90)"/><animateMotion dur="11s" begin="-4s" repeatCount="indefinite" rotate="auto"><mpath href="#r2"/></animateMotion></g>
+                <g class="plane"><use href="#pl" transform="rotate(90)"/><animateMotion dur="19s" begin="-9s" repeatCount="indefinite" rotate="auto"><mpath href="#r3"/></animateMotion></g>
+                <g class="plane"><use href="#pl" transform="rotate(90)"/><animateMotion dur="16s" begin="-2s" repeatCount="indefinite" rotate="auto"><mpath href="#r4"/></animateMotion></g>
+            </g>
+        </svg>
     </div>
 
+    <button class="icon-btn login-theme" id="theme-btn" type="button" aria-label="Toggle dark mode" title="Dark / light"></button>
+
+    <main class="login-page">
+        <form class="login-card" id="login-card" autocomplete="on" novalidate>
+            <img class="logo logo-light" src="/app/img/logo.png" alt="RideCentric" width="236">
+            <img class="logo logo-dark" src="/app/img/logo-dark.png" alt="RideCentric" width="236">
+            <h1>Welcome back</h1>
+            <p class="sub">Sign in to the dispatch board</p>
+
+            <label for="login-username">USERNAME</label>
+            <input type="text" id="login-username" name="username" autocomplete="username" autocapitalize="none" spellcheck="false" autofocus>
+
+            <label for="login-password">PASSWORD</label>
+            <div class="pw">
+                <input type="password" id="login-password" name="password" autocomplete="current-password">
+                <button type="button" id="pw-eye" aria-label="Show password" title="Show / hide password">
+                    <svg width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M2 12s3.6-7 10-7 10 7 10 7-3.6 7-10 7S2 12 2 12z"/><circle cx="12" cy="12" r="3"/></svg>
+                </button>
+            </div>
+            <div class="caps" id="caps" hidden>&#9888; Caps Lock is on</div>
+
+            <label class="check"><input type="checkbox" id="remember"> Remember my username</label>
+
+            <button class="go" id="go" type="submit"><span class="lbl">LOGIN</span><svg class="arrow" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"><path d="M5 12h14M13 6l6 6-6 6"/></svg><span class="spin"></span></button>
+            <div id="login-error-msg" class="error-msg" role="alert" aria-live="assertive"></div>
+            <p class="foot-note">No account? Ask your administrator to create one.</p>
+        </form>
+        <div class="login-meta"><span id="login-clock">--:--</span><i>&bull;</i><span id="login-date"></span></div>
+    </main>
+
+    <!-- shown after a successful login -->
+    <div id="takeoff" aria-hidden="true"></div>
+
+    <script src="/app/fx.js"></script>
     <script>
-        // Send user straight to dashboard if they are already logged in
-        if (localStorage.getItem('ridecentric_token')) window.location.href = '/app/dashboard.html';
+        (function () {
+            'use strict';
+            // Already signed in? Go straight to the dashboard (the dashboard sends us back here if the token is stale).
+            var tok = null; try { tok = localStorage.getItem('ridecentric_token'); } catch (e) {}
+            if (tok) { window.location.replace('/app/dashboard.html'); return; }
 
-        async function attemptLogin() {
-            const u = (document.getElementById('login-username') || { value: '' }).value;
-            const p = (document.getElementById('login-password') || { value: '' }).value;
-            const err = document.getElementById('login-error-msg');
-            err.className = 'error-msg';
-            err.innerText = "Authenticating...";
+            var $ = function (id) { return document.getElementById(id); };
+            var card = $('login-card'), user = $('login-username'), pass = $('login-password'), err = $('login-error-msg'), go = $('go');
+            RC.initThemeButton($('theme-btn'));
 
-            try {
-                const res = await fetch('/api/login', {
-                    method: 'POST',
-                    headers: { 'Content-Type': 'application/json' },
-                    body: JSON.stringify({ username: u, password: p })
-                });
+            // reduced motion: stop the flying planes too (SMIL is not covered by the CSS rule)
+            if (RC.reduced()) Array.prototype.forEach.call(document.querySelectorAll('.planes'), function (g) { g.parentNode.removeChild(g); });
 
-                if (res.ok) {
-                    const data = await res.json();
-                    localStorage.setItem('ridecentric_token', data.token);
-                    window.location.href = '/app/dashboard.html';
-                } else {
-                    const body = await res.json();
-                    if (Array.isArray(body.detail)) {
-                        err.innerText = body.detail.map(d => d.msg).join(', ');
-                    } else {
-                        err.innerText = body.detail || 'Login failed';
-                    }
-                }
-            } catch (e) {
-                err.innerText = "✕ System offline. Check backend terminal.";
+            // remembered username
+            try { var r = localStorage.getItem('ridecentric_remember'); if (r) { user.value = r; $('remember').checked = true; pass.focus(); } } catch (e) {}
+
+            // show / hide password
+            $('pw-eye').addEventListener('click', function () {
+                var show = pass.type === 'password';
+                pass.type = show ? 'text' : 'password';
+                this.setAttribute('aria-label', show ? 'Hide password' : 'Show password');
+                pass.focus();
+            });
+
+            // caps-lock hint
+            function caps(e) { if (e.getModifierState) $('caps').hidden = !e.getModifierState('CapsLock'); }
+            pass.addEventListener('keydown', caps); pass.addEventListener('keyup', caps);
+            pass.addEventListener('blur', function () { $('caps').hidden = true; });
+
+            // little local clock under the card
+            function tick() {
+                var d = new Date();
+                $('login-clock').textContent = d.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
+                $('login-date').textContent = d.toLocaleDateString([], { weekday: 'long', month: 'long', day: 'numeric' });
             }
-        }
+            tick(); setInterval(tick, 15000);
 
-        async function attemptSignUp() {
-            const u = (document.getElementById('signup-username') || { value: '' }).value;
-            const p = (document.getElementById('signup-password') || { value: '' }).value;
-            const err = document.getElementById('signup-error-msg');
-            err.className = 'error-msg';
-            err.innerText = "Creating user...";
-
-            try {
-                const res = await fetch('/api/signup', {
-                    method: 'POST',
-                    headers: { 'Content-Type': 'application/json' },
-                    body: JSON.stringify({ username: u, password: p })
-                });
-
-                if (res.ok) {
-                    err.className = 'error-msg ok';
-                    err.innerText = "✓ User created, now login";
-                } else {
-                    const body = await res.json();
-                    if (Array.isArray(body.detail)) {
-                        err.innerText = body.detail.map(d => d.msg).join(', ');
-                    } else {
-                        err.innerText = body.detail || 'Sign-up failed';
-                    }
-                }
-            } catch (e) {
-                err.innerText = "✕ System offline. Check backend terminal.";
+            function fail(msg) {
+                err.className = 'error-msg'; err.textContent = msg;
+                card.classList.remove('shake'); void card.offsetWidth; card.classList.add('shake');
+                go.classList.remove('busy');
             }
-        }
 
-        // Allow hitting "Enter" to login from login inputs
-        document.addEventListener("keyup", function(event) {
-            if (event.key === "Enter") {
-                const activeElement = document.activeElement;
-                if (activeElement.id === 'login-username' || activeElement.id === 'login-password') {
-                    attemptLogin();
-                } else if (activeElement.id === 'signup-username' || activeElement.id === 'signup-password') {
-                    attemptSignUp();
+            card.addEventListener('submit', async function (e) {
+                e.preventDefault();
+                var u = user.value.trim(), p = pass.value;
+                if (!u || !p) { fail('Enter your username and password.'); (u ? pass : user).focus(); return; }
+                err.textContent = ''; go.classList.add('busy');
+                var res, body = {};
+                try {
+                    res = await fetch('/api/login', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ username: u, password: p }) });
+                    try { body = await res.json(); } catch (x) {}
+                } catch (x) { fail('✕ System offline. Check the backend terminal.'); return; }
+
+                if (!res.ok || !body.token) {
+                    var d = body && body.detail;
+                    fail(Array.isArray(d) ? d.map(function (i) { return i.msg; }).join(', ') : (d || 'Login failed'));
+                    pass.select();
+                    return;
                 }
-            }
-        });
+                try {
+                    localStorage.setItem('ridecentric_token', body.token);
+                    localStorage.setItem('ridecentric_user', body.username || u);
+                    if ($('remember').checked) localStorage.setItem('ridecentric_remember', u); else localStorage.removeItem('ridecentric_remember');
+                    sessionStorage.setItem('rc-intro', '1'); // tells the dashboard to play its entrance animation once
+                } catch (x) {}
+                card.classList.add('leave');
+                RC.takeoff(body.username || u, function () { window.location.replace('/app/dashboard.html'); });
+            });
+        })();
     </script>
 </body>
 </html>
