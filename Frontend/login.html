@@ -1,56 +1,48 @@
 <!DOCTYPE html>
-<html lang="en">
+<html lang="en" data-theme="light">
 <head>
     <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
     <title>RideCentric LIVE | Dispatch Access</title>
-    <link href="https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;600;800&display=swap" rel="stylesheet">
-    <link rel="stylesheet" href="/app/style.css">
-    <style>
-        body { justify-content: center; align-items: center; background: #070a12; }
-        .auth-container { display: flex; gap: 30px; justify-content: center; align-items: flex-start; flex-wrap: wrap; }
-        .login-box, .signup-box { 
-            background: rgba(15, 23, 42, 0.85); padding: 40px; border-radius: 15px; 
-            border: 1px solid rgba(255, 255, 255, 0.1); width: 320px; text-align: center; 
-            box-shadow: 0 10px 30px rgba(0,0,0,0.5); backdrop-filter: blur(15px);
-            animation: fadeInUp 0.5s ease-out;
-        }
-        @keyframes fadeInUp {
-            from { transform: translateY(20px); opacity: 0; }
-            to { transform: translateY(0); opacity: 1; }
-        }
-        .login-box h1, .signup-box h1 { color: #4977ff; margin-top: 0; font-size: 1.8rem; letter-spacing: -1px; }
-        .login-box input, .signup-box input { 
-            width: 85%; margin-bottom: 15px; padding: 12px; border-radius: 8px; 
-            font-family: 'JetBrains Mono', monospace; background: rgba(0,0,0,0.5); 
-            border: 1px solid rgba(255, 255, 255, 0.1); color: white; outline: none; transition: 0.2s;
-        }
-        .login-box input:focus, .signup-box input:focus { border-color: #4977ff; }
-        .login-box button, .signup-box button { width: 95%; padding: 12px; font-size: 1rem; margin-top: 10px; }
-        .error-msg { color: #ef4444; font-size: 0.85rem; margin-top: 15px; min-height: 20px; font-weight: 600;}
-    </style>
+    <script>
+        // Apply the saved theme before first paint
+        try { if (localStorage.getItem('rc-theme') === 'dark') document.documentElement.setAttribute('data-theme', 'dark'); } catch (e) {}
+    </script>
+    <link href="https://fonts.googleapis.com/css2?family=Montserrat:wght@400;500;600;700&display=swap" rel="stylesheet">
+    <link rel="stylesheet" href="/app/Style.css">
 </head>
 <body>
-    <div class="auth-container">
-        <div class="login-box">
-            <h1>Login</h1>
-            <p style="color: #94a3b8; margin-bottom: 25px; margin-top: -10px; font-weight: 600;">Existing User</p>
-            
-            <input type="text" id="login-username" placeholder="Username">
-            <input type="password" id="login-password" placeholder="Password">
-            
-            <button class="btn btn-primary" onclick="attemptLogin()">Login</button>
-            <div id="login-error-msg" class="error-msg"></div>
+    <div class="login-page">
+        <div class="login-brand">
+            <svg width="34" height="34" viewBox="0 0 26 26" aria-hidden="true"><rect width="26" height="26" rx="6" fill="#1fa64a"/><path d="M8 19V7h6.2a3.6 3.6 0 0 1 .4 7.2L18 19h-2.7l-3-4.7H10.4V19H8zm2.4-6.8h3.6a1.5 1.5 0 0 0 0-3h-3.6v3z" fill="#fff"/></svg>
+            <span>RideCentric</span><span class="chip-live">LIVE</span>
         </div>
+        <div class="auth">
+            <div class="auth-box">
+                <h1>Login</h1>
+                <p class="sub">Existing User</p>
 
-        <div class="signup-box">
-            <h1>Sign Up</h1>
-            <p style="color: #94a3b8; margin-bottom: 25px; margin-top: -10px; font-weight: 600;">New User</p>
-            
-            <input type="text" id="signup-username" placeholder="Username">
-            <input type="password" id="signup-password" placeholder="Password">
-            
-            <button class="btn btn-secondary" onclick="attemptSignUp()">Sign Up</button>
-            <div id="signup-error-msg" class="error-msg"></div>
+                <label for="login-username">USERNAME</label>
+                <input type="text" id="login-username" autocomplete="username">
+                <label for="login-password">PASSWORD</label>
+                <input type="password" id="login-password" autocomplete="current-password">
+
+                <button class="go" type="button" onclick="attemptLogin()">LOGIN</button>
+                <div id="login-error-msg" class="error-msg"></div>
+            </div>
+
+            <div class="auth-box second">
+                <h1>Sign Up</h1>
+                <p class="sub">New User</p>
+
+                <label for="signup-username">USERNAME</label>
+                <input type="text" id="signup-username" autocomplete="off">
+                <label for="signup-password">PASSWORD</label>
+                <input type="password" id="signup-password" autocomplete="new-password">
+
+                <button class="go alt" type="button" onclick="attemptSignUp()">SIGN UP</button>
+                <div id="signup-error-msg" class="error-msg"></div>
+            </div>
         </div>
     </div>
 
@@ -62,6 +54,7 @@
             const u = (document.getElementById('login-username') || { value: '' }).value;
             const p = (document.getElementById('login-password') || { value: '' }).value;
             const err = document.getElementById('login-error-msg');
+            err.className = 'error-msg';
             err.innerText = "Authenticating...";
 
             try {
@@ -92,6 +85,7 @@
             const u = (document.getElementById('signup-username') || { value: '' }).value;
             const p = (document.getElementById('signup-password') || { value: '' }).value;
             const err = document.getElementById('signup-error-msg');
+            err.className = 'error-msg';
             err.innerText = "Creating user...";
 
             try {
@@ -102,6 +96,7 @@
                 });
 
                 if (res.ok) {
+                    err.className = 'error-msg ok';
                     err.innerText = "✓ User created, now login";
                 } else {
                     const body = await res.json();
