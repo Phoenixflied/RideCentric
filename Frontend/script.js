@@ -82,6 +82,7 @@ async function apiFetch(path, options) {
 
 function logout() {
     localStorage.removeItem(TOKEN_KEY);
+    try { localStorage.removeItem('ridecentric_user'); } catch (e) { /* storage blocked */ }
     redirectToLogin();
 }
 
@@ -100,7 +101,9 @@ function toast(msg, kind) {
 }
 
 function iso(d) { return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}`; }
-function dayOffset(n) { const d = new Date(); d.setDate(d.getDate() + n); return iso(d); }
+// "Today" is the date at the dispatch station (see the time-zone selector), not necessarily the date on this computer.
+function todayStr() { const p = stationParts(Date.now()); return `${p.y}-${pad(p.m)}-${pad(p.d)}`; }
+function dayOffset(n) { return n ? addDays(todayStr(), n) : todayStr(); }
 function addDays(s, n) {
     const p = s.split('-');
     const d = new Date(+p[0], +p[1] - 1, +p[2], 12);
@@ -120,7 +123,7 @@ function normalize(r) {
     const parts = String(r.arrival_time || '').split(':').map(Number);
     const mins = Number.isFinite(parts[0]) ? parts[0] * 60 + (parts[1] || 0) : 0;
     const dp = String(r.date || '').split('-').map(Number);
-    const whenTs = dp.length === 3 && dp.every(Number.isFinite) ? new Date(dp[0], dp[1] - 1, dp[2], 0, mins).getTime() : 0;
+    const whenTs = dp.length === 3 && dp.every(Number.isFinite) ? zonedTs(dp[0], dp[1], dp[2], mins) : 0;
     return Object.assign({}, r, {
         flight,
         airline: AIRLINES[code] || '',
@@ -130,7 +133,8 @@ function normalize(r) {
         gate: r.gate || 'TBD',
         passenger: r.passenger || 'N/A',
         run_type: r.run_type || 'ARRIVAL',
-        whenTs
+        whenTs,
+        mins
     });
 }
 
@@ -141,11 +145,17 @@ function normalize(r) {
 document.addEventListener("DOMContentLoaded", () => {
     if (!requireAuth()) return;
     initTheme();
+    initStation();
+    initUser();
     initClock();
     initMap();
     setupEventListeners();
+    setupExtras();
     renderDetail();
-    fetchFlights("ALL");
+    renderPulse();
+    // after a fresh login the cover from fx.js stays up for a moment, then lifts to show the dashboard
+    const minHold = new Promise((r) => setTimeout(r, 450));
+    Promise.all([fetchFlights("ALL"), minHold]).then(() => { if (window.RC) RC.introReveal(); });
     setInterval(() => {
         if (S.auto && !document.hidden && $('manual-modal-v3').hidden) fetchFlights(S.date, { silent: true });
     }, 30000);
@@ -155,11 +165,13 @@ function initClock() {
     const tick = () => {
         const el = $('clock');
         if (!el) return;
-        const d = new Date();
-        const h = d.getHours();
-        el.innerText = `${pad(h % 12 || 12)}:${pad(d.getMinutes())}:${pad(d.getSeconds())} ${h < 12 ? 'AM' : 'PM'}`;
+        const p = stationParts(Date.now());
+        el.innerText = `${pad(p.h % 12 || 12)}:${pad(p.mi)}:${pad(p.s)} ${p.h < 12 ? 'AM' : 'PM'}`;
+        tickNext();
+        if (p.s % 30 === 0) refreshClockDriven();
     };
     tick();
+    window.updateClock = tick;   // the station selector calls this so the clock changes at once
     setInterval(tick, 1000);
 }
 
@@ -252,9 +264,9 @@ function setupEventListeners() {
     });
     document.addEventListener('click', (e) => {
         const t = e.target;
-        if ((t.hasAttribute && t.hasAttribute('data-close')) || (t.classList && t.classList.contains('overlay'))) closeManualModal();
+        if ((t.hasAttribute && t.hasAttribute('data-close')) || (t.classList && t.classList.contains('overlay'))) closeOverlays();
     });
-    document.addEventListener('keydown', (e) => { if (e.key === 'Escape') closeManualModal(); });
+    document.addEventListener('keydown', (e) => { if (e.key === 'Escape') closeOverlays(); });
 
     // Date picker, stepper and "show all"
     $('date-picker').addEventListener('change', () => setDateControls($('date-picker').value, true));
@@ -314,6 +326,10 @@ function setupEventListeners() {
 
 function closeManualModal() {
     $('manual-modal-v3').hidden = true;
+}
+
+function closeOverlays() {
+    document.querySelectorAll('.overlay').forEach((o) => { o.hidden = true; });
 }
 
 function setDateControls(d, reload) {
@@ -393,8 +409,10 @@ function renderSummary() {
         const ia = STATUS_ORDER.indexOf(a), ib = STATUS_ORDER.indexOf(b);
         return (ia < 0 ? 99 : ia) - (ib < 0 ? 99 : ib) || a.localeCompare(b);
     });
-    const chip = (st, label, n, cls) =>
-        `<button type="button" class="sum ${cls}${(S.status || '') === st ? ' on' : ''}" data-st="${esc(st)}"><i></i><b class="num">${n}</b>${esc(label)}</button>`;
+    const intro = !!(window.RC && RC.introActive());   // numbers count up once, right after login
+    let n = 0;
+    const chip = (st, label, cnt, cls) =>
+        `<button type="button" class="sum ${cls}${(S.status || '') === st ? ' on' : ''}" data-st="${esc(st)}" style="--n:${n++}"><i></i><b class="num"${intro ? ` data-to="${cnt}"` : ''}>${cnt}</b>${esc(label)}</button>`;
     $('summary').innerHTML = chip('', 'All flights', rides.length, '') +
         statuses.map((st) => chip(st, st, counts[st], 'st-' + slug(st))).join('');
 }
@@ -404,7 +422,7 @@ const COLS = [
     { t: 'Flight', k: 'flight', td: (r) => `<span class="fno">${esc(r.flight)}</span>` },
     { t: 'Airline', k: 'airline', td: (r) => esc(r.airline || '—') },
     { t: 'Date', k: 'when', td: (r) => esc(String(r.date || '').slice(5).replace('-', '/')) },
-    { t: 'Arrival', k: 'when', arrow: true, td: (r) => `<span class="num">${esc(r.arrival_time || '—')}</span>` },
+    { t: 'Arrival', k: 'when', arrow: true, td: (r) => `<span class="num">${esc(r.arrival_time || '—')}</span>${dueBadge(r)}` },
     { t: 'Term', k: 'term', cell: true, td: (r) => esc(r.terminal) },
     { t: 'Gate', k: 'gate', cell: true, td: (r) => esc(r.gate) },
     { t: 'Ride #', k: 'ride', td: (r) => `<span class="num muted">${esc(r.ride_no)}</span>` },
@@ -418,6 +436,7 @@ function render() {
     if (selectedId && !getRide(selectedId)) selectedId = null;
     renderTable();
     renderDetail();
+    renderPulse();
 }
 
 function renderTable() {
@@ -429,13 +448,13 @@ function renderTable() {
 
     let body = '', lastDate = null;
     const grouped = S.sort.k === 'when';
-    list.forEach((r) => {
+    list.forEach((r, idx) => {
         if (grouped && r.date !== lastDate) {
             lastDate = r.date;
             const rel = relDay(r.date);
             body += `<tr class="sep"><td colspan="${COLS.length}">📅 ${esc(r.date)}${rel ? `<small>${rel}</small>` : ''}</td></tr>`;
         }
-        body += `<tr class="row${selectedId === r.id ? ' sel' : ''}" data-id="${esc(r.id)}" tabindex="0">` +
+        body += `<tr class="row${selectedId === r.id ? ' sel' : ''}" data-id="${esc(r.id)}" tabindex="0" style="--i:${Math.min(idx, 24)}">` +
             COLS.map((c) => `<td${c.cell ? ' class="cell-t"' : ''}>${c.td(r)}</td>`).join('') + '</tr>';
     });
     const emptyMsg = rides.length === 0 && S.date === 'ALL'
@@ -446,6 +465,7 @@ function renderTable() {
     $('foot').textContent = list.length
         ? `Showing ${list.length} of ${rides.length} flight${rides.length === 1 ? '' : 's'}${S.date === 'ALL' ? '' : ' on ' + S.date}`
         : 'Showing 0 flights';
+    lastDue = dueSignature();
 }
 
 // =============================================================================
@@ -501,6 +521,7 @@ async function forceScan() {
 
 let live = { id: null, loading: false, data: null };
 let liveReq = 0;
+let liveTimer = null;
 
 // Selects a flight: highlights its row, fills the details card and asks the airline API for live status.
 function select(id) {
@@ -508,6 +529,7 @@ function select(id) {
     if (!ride) return;
     selectedId = id;
     renderTable();
+    renderPulse();
     showFlightDetails(ride);
     if (window.matchMedia && window.matchMedia('(max-width: 1180px)').matches) {
         $('detail-card').scrollIntoView({ behavior: 'smooth', block: 'start' });
@@ -520,8 +542,9 @@ function showFlightDetails(ride) {
     const req = ++liveReq;
     renderDetail();
 
-    // Fetch live flight data from external API
-    fetchLiveFlightData(ride.flight, ride.date)
+    // Fetch live flight data from external API (after a short pause: skimming through flights must not burn API quota)
+    clearTimeout(liveTimer);
+    liveTimer = setTimeout(() => fetchLiveFlightData(ride.flight, ride.date)
         .then((data) => {
             if (req !== liveReq) return; // another flight was selected meanwhile
             live = { id: ride.id, loading: false, data: data || { status: 'API unavailable', map_url: null } };
@@ -532,7 +555,7 @@ function showFlightDetails(ride) {
             if (req !== liveReq) return;
             live = { id: ride.id, loading: false, data: { status: 'Error loading status', map_url: null } };
             renderDetail();
-        });
+        }), 250);
 }
 
 function closeFlightDetails() {
@@ -818,4 +841,291 @@ function clearFlightTracking(resetView = true) {
         map.setView(DEFAULT_VIEW.center, DEFAULT_VIEW.zoom);
         $('map-hint').textContent = 'Select a flight, then press “Track on map” to follow it.';
     }
+}
+
+
+// =============================================================================
+// DISPATCH TIME ZONE
+// =============================================================================
+// The dispatcher may sit in a different time zone from the airport. Flight times in the list are airport
+// times, so "Today", the clock and all countdowns use the time zone picked here (saved in this browser).
+
+const STATION_KEY = 'rc-station';
+const STATIONS = [
+    { id: 'America/New_York', label: 'Miami / New York' },
+    { id: 'America/Chicago', label: 'Chicago / Dallas' },
+    { id: 'America/Denver', label: 'Denver' },
+    { id: 'America/Los_Angeles', label: 'Los Angeles' },
+    { id: 'Europe/London', label: 'London' },
+    { id: 'Asia/Kathmandu', label: 'Kathmandu' },
+    { id: 'UTC', label: 'UTC' },
+    { id: '', label: 'This computer' }
+];
+let stationTz = 'America/New_York';   // the map starts on Miami, so Miami time is the default
+const _dtf = {};
+
+function dtf(tz) {
+    return _dtf[tz] || (_dtf[tz] = new Intl.DateTimeFormat('en-US', Object.assign(
+        { hourCycle: 'h23', year: 'numeric', month: 'numeric', day: 'numeric', hour: 'numeric', minute: 'numeric', second: 'numeric' },
+        tz ? { timeZone: tz } : {})));
+}
+
+// Wall-clock parts of a moment in the station's time zone.
+function stationParts(ts) {
+    const o = {};
+    dtf(stationTz).formatToParts(new Date(ts)).forEach((p) => { if (p.type !== 'literal') o[p.type] = +p.value; });
+    return { y: o.year, m: o.month, d: o.day, h: o.hour === 24 ? 0 : o.hour, mi: o.minute, s: o.second };
+}
+
+// The moment (ms since 1970) at which the station's wall clock shows the given date and minutes-after-midnight.
+function zonedTs(y, m, d, mins) {
+    if (!stationTz) return new Date(y, m - 1, d, 0, mins).getTime();
+    const guess = Date.UTC(y, m - 1, d, 0, mins);
+    const off = (t) => { const p = stationParts(t); return Date.UTC(p.y, p.m - 1, p.d, p.h, p.mi, p.s) - Math.floor(t / 1000) * 1000; };
+    return guess - off(guess - off(guess));   // second pass settles daylight-saving edges
+}
+
+function initStation() {
+    let saved = null;
+    try { saved = localStorage.getItem(STATION_KEY); } catch (e) { /* storage blocked */ }
+    if (saved !== null && STATIONS.some((x) => x.id === saved)) stationTz = saved;
+    const sel = $('station');
+    sel.innerHTML = STATIONS.map((x) => `<option value="${esc(x.id)}">${esc(x.label)}</option>`).join('');
+    sel.value = stationTz;
+    sel.addEventListener('change', () => {
+        stationTz = sel.value;
+        try { localStorage.setItem(STATION_KEY, stationTz); } catch (e) { /* storage blocked */ }
+        rides = rides.map(normalize);          // flight moments depend on the zone
+        if (window.updateClock) window.updateClock();
+        render();
+        toast('Dispatch time: ' + (STATIONS.find((x) => x.id === stationTz) || {}).label);
+    });
+}
+
+function initUser() {
+    let u = '';
+    try { u = localStorage.getItem('ridecentric_user') || ''; } catch (e) { /* storage blocked */ }
+    if ($('whoami')) $('whoami').textContent = u;
+    if ($('avatar')) $('avatar').textContent = (u.trim().charAt(0) || '?').toUpperCase();
+    const chip = document.querySelector('.user-chip');
+    if (chip && !u) chip.hidden = true;
+}
+
+// =============================================================================
+// NEXT ARRIVAL, TIMELINE, DUE-SOON BADGES
+// =============================================================================
+
+const DONE = ['LANDED', 'COMPLETED', 'CANCELLED', 'CANCELED'];
+
+function isOpen(r) { return r.whenTs && DONE.indexOf(r.status) < 0; }
+
+function fmtCountdown(ms) {
+    const s = Math.max(0, Math.round(ms / 1000)), h = Math.floor(s / 3600), m = Math.floor((s % 3600) / 60);
+    if (h >= 48) return `${Math.floor(h / 24)} days`;
+    if (h >= 1) return `${h}h ${pad(m)}m`;
+    return `${m}m ${pad(s % 60)}s`;
+}
+
+function nextRide() {
+    const floor = Date.now() - 10 * 60000;     // stays "next" for 10 minutes after its scheduled time
+    let best = null;
+    rides.forEach((r) => { if (isOpen(r) && r.whenTs >= floor && (!best || r.whenTs < best.whenTs)) best = r; });
+    return best;
+}
+
+// A small badge on flights due within the hour.
+function dueBadge(r) {
+    if (!isOpen(r)) return '';
+    const diff = r.whenTs - Date.now();
+    if (diff < -10 * 60000 || diff > 60 * 60000) return '';
+    if (diff <= 60000) return '<span class="due now">NOW</span>';
+    return `<span class="due">in ${Math.round(diff / 60000)}m</span>`;
+}
+
+function dueSignature() {
+    return rides.map((r) => dueBadge(r)).join('|');
+}
+
+function renderNext() {
+    const el = $('nextarr');
+    if (!el) return;
+    const label = '<div class="na-label"><span class="na-live"></span>NEXT ARRIVAL</div>';
+    const r = nextRide();
+    if (!r) {
+        const last = rides.filter((x) => x.whenTs).sort((a, b) => b.whenTs - a.whenTs)[0];
+        el.className = 'nextarr idle';
+        el.removeAttribute('data-ts');
+        el.innerHTML = label + '<div class="na-idle">No upcoming arrivals</div>' +
+            `<div class="na-sub">${last ? `Latest on this board: ${esc(last.flight)}, ${esc(last.date)} ${esc(last.arrival_time)}` : 'Scan manifests or add a flight to get started.'}</div>`;
+        return;
+    }
+    el.setAttribute('data-ts', r.whenTs);
+    el.innerHTML = label +
+        `<div class="na-main"><button type="button" class="na-flight" data-id="${esc(r.id)}" title="Show this flight">${esc(r.flight)}</button><span class="na-air">${esc(r.airline)}</span></div>` +
+        '<div class="na-count" id="na-count"></div>' +
+        `<div class="na-sub">${esc(r.arrival_time)} · ${esc(relDay(r.date) || r.date)} · Term ${esc(r.terminal)} · Gate ${esc(r.gate)}</div>`;
+    tickNext();
+}
+
+// Called every second: only the countdown text and the colour change.
+function tickNext() {
+    const el = $('nextarr'), c = $('na-count');
+    if (!el || !c || !el.getAttribute('data-ts')) return;
+    const diff = +el.getAttribute('data-ts') - Date.now();
+    c.textContent = diff <= 60000 ? 'Arriving now' : 'in ' + fmtCountdown(diff);
+    el.className = 'nextarr' + (diff <= 60000 ? ' now' : diff <= 30 * 60000 ? ' soon' : '');
+}
+
+// Which day the timeline shows: the chosen date; with "all dates" today if it has flights, else the next one, else the latest.
+function timelineDay() {
+    if (S.date && S.date !== 'ALL') return S.date;
+    const today = todayStr();
+    if (rides.some((r) => r.date === today)) return today;
+    const nx = nextRide();
+    if (nx) return nx.date;
+    const dates = rides.map((r) => r.date).filter(Boolean).sort();
+    return dates.length ? dates[dates.length - 1] : today;
+}
+
+function dayLabel(date) {
+    const p = String(date).split('-').map(Number);
+    return new Date(p[0], p[1] - 1, p[2], 12).toLocaleDateString([], { weekday: 'short', month: 'short', day: 'numeric' });
+}
+
+function renderTimeline() {
+    const el = $('timeline');
+    if (!el) return;
+    const day = timelineDay(), isToday = day === todayStr();
+    const list = rides.filter((r) => r.date === day && r.whenTs).sort((a, b) => a.mins - b.mins);
+    const hours = new Array(24).fill(0);
+    list.forEach((r) => { hours[Math.min(23, Math.floor(r.mins / 60))]++; });
+    const peak = Math.max.apply(null, hours);
+    const peakH = hours.indexOf(peak);
+    const head = `<div class="tl-head"><span>ARRIVALS</span><b>${esc(dayLabel(day))}</b>${isToday ? '<span>Today</span>' : relDay(day) ? `<span>${esc(relDay(day))}</span>` : ''}` +
+        `<span>${list.length} flight${list.length === 1 ? '' : 's'}</span>` +
+        (peak > 1 ? `<em>Busiest: ${pad(peakH)}:00 (${peak})</em>` : '') + '</div>';
+
+    let ticks = '';
+    for (let h = 0; h <= 24; h += 3) ticks += `<span class="tl-tick${h === 0 ? ' first' : h === 24 ? ' last' : ''}" style="left:${h / 24 * 100}%">${pad(h)}</span>`;
+
+    let body;
+    if (!list.length) {
+        body = `<div class="tl-empty">No arrivals on this day.</div>`;
+    } else {
+        const lastAt = [-99, -99, -99, -99];   // staggers dots that would overlap into 4 rows
+        const now = Date.now();
+        const dots = list.map((r, k) => {
+            const pct = r.mins / 1440 * 100;
+            let lane = lastAt.findIndex((x) => pct - x > 2);
+            if (lane < 0) lane = k % 4;
+            lastAt[lane] = pct;
+            return `<button type="button" class="tl-dot st-${esc(r.statusSlug)}${r.whenTs < now ? ' past' : ''}${selectedId === r.id ? ' sel' : ''}" data-id="${esc(r.id)}" ` +
+                `style="left:${pct.toFixed(2)}%;--lane:${lane};--k:${Math.min(k, 40)}" title="${esc(r.flight)} · ${esc(r.arrival_time)} · ${esc(r.status)}" aria-label="${esc(r.flight)} at ${esc(r.arrival_time)}"></button>`;
+        }).join('');
+        let nowMark = '';
+        if (isToday) {
+            const p = stationParts(now);
+            nowMark = `<span class="tl-now" style="left:${((p.h * 60 + p.mi) / 1440 * 100).toFixed(2)}%"></span>`;
+        }
+        body = `<div class="tl-track"><div class="tl-line"></div>${ticks}${nowMark}${dots}</div>`;
+    }
+    el.innerHTML = head + body;
+}
+
+function renderPulse() {
+    renderNext();
+    renderTimeline();
+}
+
+// Called every 30 seconds by the clock: refresh the parts of the page that depend on the current time.
+let lastDue = '';
+function refreshClockDriven() {
+    renderNext();
+    renderTimeline();
+    const sig = dueSignature();
+    if (sig !== lastDue) { lastDue = sig; renderTable(); }
+}
+
+// Select a flight from anywhere (next-arrival card, timeline, keyboard) and bring its row into view.
+function revealAndSelect(id) {
+    const r = getRide(id);
+    if (!r) return;
+    if (!visibleRides().some((x) => x.id === id)) {        // hidden by the search or a status chip: clear those first
+        S.q = ''; S.status = null; $('search-bar').value = '';
+        render();
+    }
+    select(id);
+    const row = Array.prototype.find.call(document.querySelectorAll('tr.row'), (tr) => tr.getAttribute('data-id') === id);
+    if (row) row.scrollIntoView({ block: 'nearest', behavior: window.RC && RC.reduced() ? 'auto' : 'smooth' });
+}
+
+// =============================================================================
+// CSV EXPORT + KEYBOARD SHORTCUTS
+// =============================================================================
+
+function csvCell(v) {
+    let t = String(v == null ? '' : v);
+    if (/^[=+\-@\t\r]/.test(t)) t = "'" + t;               // stops spreadsheets from running a cell as a formula
+    return /[",\r\n]/.test(t) ? '"' + t.replace(/"/g, '""') + '"' : t;
+}
+
+function exportCsv() {
+    const list = visibleRides();
+    if (!list.length) { toast('Nothing to export', 'warn'); return; }
+    const head = ['Date', 'Arrival', 'Flight', 'Airline', 'Status', 'Terminal', 'Gate', 'Ride #', 'Passenger', 'Type'];
+    const rows = list.map((r) => [r.date, r.arrival_time, r.flight, r.airline, r.status, r.terminal, r.gate, r.ride_no, r.passenger, r.run_type]);
+    const text = '﻿' + [head].concat(rows).map((row) => row.map(csvCell).join(',')).join('\r\n') + '\r\n';
+    const a = document.createElement('a');
+    a.href = URL.createObjectURL(new Blob([text], { type: 'text/csv;charset=utf-8' }));
+    a.download = `ridecentric-${S.date === 'ALL' ? 'all-flights' : S.date}.csv`;
+    document.body.appendChild(a);
+    a.click();
+    setTimeout(() => { URL.revokeObjectURL(a.href); a.remove(); }, 1000);
+    toast(`Exported ${list.length} flight${list.length === 1 ? '' : 's'}`, 'ok');
+}
+
+function moveSelection(step) {
+    const list = visibleRides();
+    if (!list.length) return;
+    let i = list.findIndex((r) => r.id === selectedId);
+    i = i < 0 ? (step > 0 ? 0 : list.length - 1) : Math.max(0, Math.min(list.length - 1, i + step));
+    revealAndSelect(list[i].id);
+}
+
+function setupExtras() {
+    $('csv-btn').addEventListener('click', exportCsv);
+    $('help-btn').addEventListener('click', () => { $('help-modal').hidden = !$('help-modal').hidden; });
+    $('nextarr').addEventListener('click', (e) => {
+        const b = e.target.closest('.na-flight');
+        if (b) revealAndSelect(b.getAttribute('data-id'));
+    });
+    $('timeline').addEventListener('click', (e) => {
+        const b = e.target.closest('.tl-dot');
+        if (b) revealAndSelect(b.getAttribute('data-id'));
+    });
+
+    document.addEventListener('keydown', (e) => {
+        if (e.ctrlKey || e.metaKey || e.altKey) return;
+        const t = e.target, typing = !!t && (/^(INPUT|TEXTAREA|SELECT)$/.test(t.tagName) || t.isContentEditable);
+        if (e.key === 'Escape' && t && t.id === 'search-bar') { t.blur(); return; }
+        if (typing) return;
+        const anyOpen = Array.prototype.some.call(document.querySelectorAll('.overlay'), (o) => !o.hidden);
+        if (e.key === '?') { e.preventDefault(); $('help-modal').hidden = !$('help-modal').hidden; return; }
+        if (anyOpen) return;
+        const k = e.key.toLowerCase();
+        const act = {
+            '/': () => $('search-bar').focus(),
+            j: () => moveSelection(1),
+            k: () => moveSelection(-1),
+            n: () => { const r = nextRide(); if (r) revealAndSelect(r.id); else toast('No upcoming arrivals'); },
+            t: () => $('d-today').click(),
+            '[': () => $('d-prev').click(),
+            ']': () => $('d-next').click(),
+            a: () => $('add-btn').click(),
+            r: () => { fetchFlights(S.date); toast('Refreshed'); },
+            e: exportCsv,
+            d: () => $('theme-btn').click()
+        }[k];
+        if (act) { e.preventDefault(); act(); }
+    });
 }

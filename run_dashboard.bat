@@ -15,7 +15,7 @@ if not exist ".env" (
     echo        The app still runs without a key, live flight status just stays off.
 )
 
-echo [1/2] Installing requirements...
+echo [1/3] Installing requirements...
 %PY% -m pip install -r requirements.txt
 if errorlevel 1 (
     echo [ERROR] Could not install the requirements. Check that Python is installed and you are online.
@@ -23,7 +23,14 @@ if errorlevel 1 (
     exit /b 1
 )
 
-echo [2/2] Starting the server on http://localhost:8000 ...
+if not exist "users.json" (
+    echo.
+    echo [2/3] First start: create the login for the dashboard ^(no sign-up on the website^).
+    %PY% add_user.py
+    echo.
+)
+
+echo [3/3] Starting the server on http://localhost:8000 ...
 start "" cmd /c "timeout /t 4 >nul & start http://localhost:8000/app/login.html"
 %PY% -m uvicorn main:app --port 8000
 pause
