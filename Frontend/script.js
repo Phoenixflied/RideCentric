@@ -501,6 +501,12 @@ function renderTable() {
 // PDF SCAN
 // =============================================================================
 
+let statusTimer = null;   // one timer for the scan/upload message, so an old one never wipes a newer message
+function holdStatus(ms) {
+    clearTimeout(statusTimer);
+    statusTimer = setTimeout(() => { const el = $('scan-status'); if (el) el.innerText = ''; }, ms);
+}
+
 let sysStatus = null;   // numbers from /api/status (rides kept, next automatic delete, API requests this month)
 
 async function loadStatus() {
@@ -546,6 +552,7 @@ async function forceScan() {
 
     scanBtn.disabled = true;
     scanBtn.innerText = "⏳ Scanning...";
+    clearTimeout(statusTimer);
     if (statusEl) statusEl.innerText = "Reading the manifests folder...";
 
     try {
@@ -572,7 +579,7 @@ async function forceScan() {
     } finally {
         scanBtn.disabled = false;
         scanBtn.innerHTML = "&#8635; Scan folder";
-        setTimeout(() => { if (statusEl) statusEl.innerText = ""; }, 8000);
+        holdStatus(8000);
     }
 }
 
@@ -584,6 +591,7 @@ async function uploadManifests(fileList) {
     if (!files.length) { toast('Choose one or more manifest PDF files', 'warn'); return; }
     if (!requireAuth()) return;
     btn.disabled = true;
+    clearTimeout(statusTimer);
     const total = { added: 0, updated: 0, expired: 0, already: 0, ok: 0, errors: [] };
     for (let i = 0; i < files.length; i++) {
         const f = files[i];
@@ -607,7 +615,7 @@ async function uploadManifests(fileList) {
     const msg = (bits.length ? bits.join(', ') : (total.ok ? 'nothing new' : '')) + (total.errors.length ? (bits.length || total.ok ? ' · ' : '') + total.errors[0] : '');
     if (statusEl) statusEl.innerText = (total.errors.length ? '⚠️ ' : '✅ ') + msg;
     toast(msg || 'Upload finished', total.errors.length ? 'warn' : 'ok');
-    setTimeout(() => { if (statusEl) statusEl.innerText = ''; }, 10000);
+    holdStatus(10000);
     fetchFlights(S.date);
     loadStatus();
 }
