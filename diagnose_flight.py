@@ -5,6 +5,7 @@
 
 It makes 1 to 4 real requests to AirLabs (they count towards your monthly budget) and prints every request,
 how many results came back, and which result was chosen. The API key is never printed.
+Like the dashboard, it only looks up flights arriving today: leave the date out, or give today's date.
 """
 import os
 import sys
@@ -33,8 +34,12 @@ def main(argv):
         return 1
     parts = live.split_code(flight)
     print(f"Flight {flight!r}: " + (f"airline {parts[0]} / {parts[1]}, number {parts[2]}" if parts else "not a valid flight number"))
-    print(f"Window: live data opens {live.window_hours()} h before arrival.  Budget: {live.usage()['calls']} of "
+    print(f"Rule: only flights arriving today ({live.today_str()}, station time) are looked up.  Budget: {live.usage()['calls']} of "
           f"{live.usage()['budget'] or 'unlimited'} requests used this month.\n")
+    if date and date != live.today_str():
+        print(f"{date} is not today, so the dashboard would not ask AirLabs about it and nothing was requested.\n"
+              "Leave the date out (or use today's date) to see how the flight is looked up.")
+        return 0
 
     def traced(endpoint, **params):
         print(f"  request  {endpoint}  {params}")
@@ -48,7 +53,7 @@ def main(argv):
 
     res = live.lookup(flight, date, hhmm, airport, force=True, fetch=traced)
     print("\nResult")
-    for k in ("status", "checked_as", "operator", "eta", "arrived", "terminal", "gate", "baggage", "aircraft", "tried", "detail"):
+    for k in ("status", "checked_as", "operator", "eta", "arrived", "terminal", "gate", "baggage", "aircraft", "route", "tried", "detail"):
         if res.get(k) not in (None, "", []):
             print(f"  {k}: {res[k]}")
     if not airport:
