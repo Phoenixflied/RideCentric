@@ -57,13 +57,15 @@
                         <button type="button" id="d-next" title="Next day">&#8250;</button>
                     </div>
                     <button class="tbtn" id="show-all" type="button">Show all</button>
-                    <button class="tbtn solid" id="scan-btn" type="button">&#8635; Scan PDF</button>
+                    <button class="tbtn solid" id="upload-btn" type="button" title="Choose this month's manifest PDFs: they are stored for the whole month">&#11014; Upload PDFs</button>
+                    <input type="file" id="upload-input" accept="application/pdf,.pdf" multiple hidden>
+                    <button class="tbtn" id="scan-btn" type="button" title="Load new PDFs from the manifests folder on the server">&#8635; Scan folder</button>
                     <button class="tbtn" id="csv-btn" type="button" title="Download the flights you see as a spreadsheet (E)">&#11015; CSV</button>
                     <span class="scan-status" id="scan-status" role="status"></span>
                     <label class="switch" title="Reload the flight list every 30 seconds"><input type="checkbox" id="auto" checked><span>Auto-refresh</span><span class="livedot"></span></label>
                 </div>
                 <div class="table-wrap" id="data-panel"><table class="grid" id="grid"><thead></thead><tbody></tbody></table></div>
-                <div class="foot" id="foot"></div>
+                <div class="foot"><span id="foot"></span><span class="store-chip" id="store-chip"></span></div>
             </section>
 
             <aside class="side" id="side">

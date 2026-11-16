@@ -1,23 +1,58 @@
-"""Live flight status through AirLabs (https://airlabs.co).
+"""Live flight status through AirLabs (https://airlabs.co), built to spend as few API calls as possible.
 
-Standard library only. The API key is read from the FLIGHT_API_KEY environment variable
-(put it in the .env file next to main.py) and is only used here on the server: it is
-never sent to the browser and never appears in the messages returned by lookup().
+Standard library only. The API key is read from FLIGHT_API_KEY (the .env file next to main.py). It is only used
+here on the server: it never reaches the browser and never appears in anything lookup() returns.
+
+How the API is used only when it is needed
+  * Nothing is requested for a flight whose arrival is further away than LIVE_WINDOW_HOURS (default 10): AirLabs
+    does not list those yet. The dashboard says "Scheduled" and when live data opens, instead of "not found".
+  * Answers are remembered (live_cache.json). A flight is re-checked at most every 30 min while it is hours away,
+    every 10 min within 3 h, every 3 min around landing, and never again once it has landed or been cancelled.
+  * A request counter (live_usage.json) enforces LIVE_MONTHLY_BUDGET (default 1000, 0 = unlimited).
+  * The plane's map position is requested only while the map is open, at most once a minute.
+
+How regional flights (SkyWest "OO"/SKW, Endeavor "9E"/EDV, Republic, Envoy, PSA ...) are found
+  The flight is asked for under its IATA code (OO5131), its ICAO code (SKW5131) and, when the airport is known,
+  from that airline's arrivals board at the airport (also matching the Delta/American/United/Alaska number the
+  flight is sold under). Boards are shared: one request serves every flight of that airline. Whatever worked is
+  remembered, so refreshes use a single request.
 """
 import json
 import os
 import re
+import threading
+import time
 import urllib.error
 import urllib.parse
 import urllib.request
+from collections import defaultdict
+
+import airlines
+import store
 
 API_BASE = "https://airlabs.co/api/v9"
 TIMEOUT = 8  # seconds
+
+CACHE_FILE = "live_cache.json"
+USAGE_FILE = "live_usage.json"
+
+# re-check intervals (seconds)
+TTL_FAR, TTL_MID, TTL_NEAR, TTL_OVERDUE, TTL_NODATA = 1800, 600, 180, 900, 1200
+FORCE_MIN = 120      # the "Refresh now" button works at most this often per flight
+POSITION_TTL = 60
+BOARD_TTL = 600
+DELAY_MIN = 5        # minutes of lateness before a flight is called "Delayed"
 
 
 class LiveError(Exception):
     """A problem talking to AirLabs. The message is short and never contains the API key."""
 
+
+class BudgetError(LiveError):
+    pass
+
+
+# --------------------------------------------------------------------------- settings / key
 
 def load_env(path):
     """Read KEY=VALUE lines from a .env file into os.environ. Real environment variables win."""
@@ -47,6 +82,25 @@ def api_key():
     return key
 
 
+def _env_int(name, default):
+    try:
+        return int((os.environ.get(name) or "").strip())
+    except ValueError:
+        return default
+
+
+def window_hours():
+    return max(1, _env_int("LIVE_WINDOW_HOURS", 10))
+
+
+def monthly_budget():
+    return max(0, _env_int("LIVE_MONTHLY_BUDGET", 1000))
+
+
+def max_tries():
+    return max(1, min(8, _env_int("LIVE_MAX_TRIES", 4)))
+
+
 def fetch_json(endpoint, **params):
     """GET one AirLabs endpoint and return its parsed JSON."""
     params["api_key"] = api_key()
@@ -68,10 +122,105 @@ def fetch_json(endpoint, **params):
     return data
 
 
+# --------------------------------------------------------------------------- flight codes
+
 def clean_flight(code):
     """'af 94' -> 'AF94'"""
     return re.sub(r"[^A-Z0-9]", "", str(code or "").upper())
 
+
+_CODE = re.compile(r"^(?:([A-Z]{3})|([A-Z0-9]{2}))0*(\d{1,4})$")
+
+
+def split_code(flight):
+    """'OO 5131' / 'SKW5131' / 'CX0870' -> (airline_iata, airline_icao, number) or None.
+    The leading zeros of the number are dropped ('CX0870' -> CX, CPA, '870')."""
+    m = _CODE.match(clean_flight(flight))
+    if not m:
+        return None
+    a3, a2, num = m.group(1), m.group(2), m.group(3)
+    if a3:
+        iata = airlines.iata_of(a3)
+        return (iata, a3, num) if iata else (None, a3, num)
+    return a2, airlines.icao_of(a2), num
+
+
+# --------------------------------------------------------------------------- state: cache + usage
+
+_lock = threading.RLock()
+_key_locks = defaultdict(threading.Lock)
+_boards = {}      # (airline, airport) -> (fetched_ts, entries)   (memory only)
+_positions = {}   # ident -> (fetched_ts, position)
+
+
+def _read(path, default):
+    try:
+        with open(path, "r", encoding="utf-8") as f:
+            return json.load(f)
+    except (OSError, ValueError):
+        return default
+
+
+def _write(path, data):
+    tmp = f"{path}.tmp{os.getpid()}"
+    with open(tmp, "w", encoding="utf-8") as f:
+        json.dump(data, f)
+    os.replace(tmp, path)
+
+
+def _month(now):
+    return time.strftime("%Y-%m", time.localtime(now))
+
+
+def usage(now=None):
+    now = time.time() if now is None else now
+    with _lock:
+        u = _read(USAGE_FILE, {})
+        if not isinstance(u, dict) or u.get("month") != _month(now):
+            u = {"month": _month(now), "calls": 0}
+        budget = monthly_budget()
+        return {"month": u["month"], "calls": int(u.get("calls", 0)), "budget": budget,
+                "remaining": max(0, budget - int(u.get("calls", 0))) if budget else None}
+
+
+def _spend(now):
+    """Counts one API request. Raises BudgetError when this month's budget is used up."""
+    with _lock:
+        u = usage(now)
+        if u["budget"] and u["calls"] >= u["budget"]:
+            raise BudgetError("This month's API budget is used up")
+        _write(USAGE_FILE, {"month": u["month"], "calls": u["calls"] + 1})
+
+
+def _load_cache():
+    c = _read(CACHE_FILE, {})
+    return c if isinstance(c, dict) else {}
+
+
+def _save_cache(cache, now):
+    cutoff = now - 3 * 86400
+    keep = {k: v for k, v in cache.items() if isinstance(v, dict) and v.get("fetched", 0) >= cutoff}
+    _write(CACHE_FILE, keep)
+
+
+def _ttl(entry, ride_ts, now):
+    """Seconds this saved answer stays fresh; None = for good (landed / cancelled)."""
+    if entry.get("final"):
+        return None
+    if entry["result"].get("status") == "No live data yet":
+        return TTL_NODATA
+    arrival = entry.get("arr_ts") or ride_ts or now
+    until = arrival - now
+    if until > 3 * 3600:
+        return TTL_FAR
+    if until > 3600:
+        return TTL_MID
+    if until > -1800:
+        return TTL_NEAR
+    return TTL_OVERDUE
+
+
+# --------------------------------------------------------------------------- reading AirLabs answers
 
 def _text(value):
     value = str(value).strip() if value is not None else ""
@@ -84,93 +233,296 @@ def _clock(stamp):
     return stamp.split(" ")[1][:5] if " " in stamp else None
 
 
-def _int(value):
+def _int(value, default=None):
     try:
         return int(float(value))
     except (TypeError, ValueError):
-        return 0
+        return default
 
 
-def _pick(entries, date):
-    """AirLabs can list several days of the same flight: prefer the one on the wanted date."""
-    if not isinstance(entries, list) or not entries:
+def _ts(entry, base):
+    """Unix time of arr_time / arr_estimated / arr_actual (uses the _ts field, else the local text at the station)."""
+    v = _int(entry.get(base + "_ts"))
+    if v:
+        return v
+    text = str(entry.get(base) or "")
+    if " " in text:
+        d, t = text.split(" ", 1)
+        return store.local_epoch(d, t[:5])
+    return None
+
+
+def _entries(data):
+    resp = data.get("response") if isinstance(data, dict) else None
+    return [e for e in resp if isinstance(e, dict)] if isinstance(resp, list) else []
+
+
+def _pick_leg(cands, ride_ts, airport):
+    """Several legs/days of a flight can come back: take the one arriving closest to the ride (and at its airport)."""
+    if not cands:
         return None
-    entries = [e for e in entries if isinstance(e, dict)]
-    if date:
-        for e in entries:
-            if str(e.get("arr_time") or e.get("dep_time") or "").startswith(date):
-                return e
-    return entries[0] if entries else None
+    if airport:
+        here = [e for e in cands if str(e.get("arr_iata") or "").upper() == airport]
+        cands = here or cands
+    if ride_ts is None:
+        return cands[0]
+
+    def gap(e):
+        t = _ts(e, "arr_time") or _ts(e, "arr_estimated") or _ts(e, "arr_actual")
+        return abs(t - ride_ts) if t else 10 ** 9
+
+    best = min(cands, key=gap)
+    return best if gap(best) <= 14 * 3600 else None  # another day's flight is not this ride
 
 
-def _status(entry):
+def _pair(code):
+    """'oo 5131' / 'OO05131' -> 'OO5131' (airline + number without leading zeros), or None."""
+    p = split_code(code)
+    return f"{p[0]}{p[2]}" if p and p[0] else None
+
+
+def _matches(entry, pair):
+    """Does a board entry belong to the wanted flight? (its own number, or the number it is sold under)"""
+    if pair in (_pair(entry.get("flight_iata")), _pair(entry.get("cs_flight_iata"))):
+        return True
+    for a_key, n_key in (("airline_iata", "flight_number"), ("cs_airline_iata", "cs_flight_number")):
+        a, n = str(entry.get(a_key) or "").upper(), re.sub(r"^0+", "", str(entry.get(n_key) or ""))
+        if a and n and a + n == pair:
+            return True
+    return False
+
+
+def _status(entry, sched_ts, est_ts):
     raw = str(entry.get("status") or "").lower()
-    delay = _int(entry.get("delayed"))
+    delay = _int(entry.get("arr_delayed"))
+    if delay is None and est_ts and sched_ts:
+        delay = round((est_ts - sched_ts) / 60)
+    if delay is None:
+        delay = _int(entry.get("delayed"), 0)  # deprecated field, only as a last resort
+    delay = max(0, delay or 0)
     if raw == "cancelled":
-        return "Cancelled", 0
+        return "Cancelled", 0, True
     if raw == "landed":
-        return "Landed", delay
-    if delay > 0:
-        return f"Delayed {delay}m", delay
+        return "Landed", delay, True
+    if delay >= DELAY_MIN:
+        return f"Delayed {delay}m", delay, False
     if raw == "active":
-        return "In Air", 0
-    return "On Time", 0
+        return "In Air", 0, False
+    return "On Time", 0, False
 
 
-def _position(flight_iata, fetch):
+def _position(ident, fetch, now):
     """Where the plane is right now, in the units the dashboard prints (feet, knots, degrees)."""
-    data = fetch("flight", flight_iata=flight_iata)
+    hit = _positions.get(ident)
+    if hit and now - hit[0] < POSITION_TTL:
+        return hit[1]
+    kind = "flight_icao" if re.match(r"^[A-Z]{3}\d", ident) else "flight_iata"
+    data = fetch("flight", **{kind: ident})
     r = data.get("response") if isinstance(data, dict) else None
-    if not isinstance(r, dict):
-        return None
-    try:
-        lat, lng = float(r["lat"]), float(r["lng"])
-    except (KeyError, TypeError, ValueError):
-        return None
-
-    def num(v, factor=1.0):
+    pos = None
+    if isinstance(r, dict):
         try:
-            return round(float(v) * factor)
-        except (TypeError, ValueError):
-            return None
+            lat, lng = float(r["lat"]), float(r["lng"])
 
-    return {
-        "latitude": lat, "longitude": lng,
-        "altitude": num(r.get("alt"), 3.28084),   # AirLabs: metres  -> feet
-        "heading": num(r.get("dir")),             # degrees
-        "speed": num(r.get("speed"), 0.539957),   # AirLabs: km/h    -> knots
-    }
+            def num(v, factor=1.0):
+                try:
+                    return round(float(v) * factor)
+                except (TypeError, ValueError):
+                    return None
+
+            pos = {"latitude": lat, "longitude": lng,
+                   "altitude": num(r.get("alt"), 3.28084),   # AirLabs: metres -> feet
+                   "heading": num(r.get("dir")),             # degrees
+                   "speed": num(r.get("speed"), 0.539957)}   # AirLabs: km/h   -> knots
+        except (KeyError, TypeError, ValueError):
+            pos = None
+    _positions[ident] = (now, pos)
+    return pos
 
 
-def lookup(flight, date=None, fetch=None):
+# --------------------------------------------------------------------------- the lookup
+
+def _base(code):
+    return {"flight": code, "configured": True, "status": "Not found", "delay_minutes": 0, "eta": None, "arrived": None,
+            "terminal": None, "gate": None, "baggage": None, "aircraft": None, "position": None, "detail": None,
+            "trackable": False, "checked_as": None, "tried": [], "cached": False, "age_s": 0, "early": False,
+            "operator": None}
+
+
+def _plan(parsed, airport):
+    """Every way to ask for this flight, cheapest/likeliest first: [(label, kind, params, airline)]."""
+    iata, icao, num = parsed
+    steps = []
+    if iata:
+        steps.append((f"{iata}{num}", "direct", {"flight_iata": f"{iata}{num}"}, None))
+    if icao:
+        steps.append((f"{icao}{num}", "direct", {"flight_icao": f"{icao}{num}"}, None))
+    if iata and airport:
+        partners = airlines.PARTNER_OPERATORS.get(iata, [])
+        order = ([*partners, iata] if int(num) >= 3000 else [iata, *partners])  # high numbers are usually regional flights
+        for a in dict.fromkeys(order):
+            steps.append((f"{a} arrivals at {airport}", "board", {"airline_iata": a, "arr_iata": airport}, a))
+    return steps
+
+
+def _resolve(call, parsed, ride_ts, airport, known, now):
+    """Finds the flight. Returns (entry, label) or (None, None); also the list of what was tried."""
+    iata, icao, num = parsed
+    pair = f"{iata}{num}" if iata else None
+    tried, spent = [], 0
+    steps = _plan(parsed, airport)
+    if known:  # this flight was found before: ask for exactly that first
+        kind = "flight_icao" if re.match(r"^[A-Z]{3}\d", known) else "flight_iata"
+        steps.insert(0, (known, "direct", {kind: known}, None))
+    seen = set()
+    for label, kind, params, airline in steps:
+        sig = tuple(sorted(params.items()))
+        if sig in seen:
+            continue
+        seen.add(sig)
+        if kind == "board":
+            hit = _boards.get((airline, airport))
+            if hit and now - hit[0] < BOARD_TTL:
+                entries, fresh = hit[1], False
+            else:
+                if spent >= max_tries():
+                    break
+                spent += 1
+                tried.append(label)
+                entries, fresh = _entries(call("schedules", **params)), True
+                _boards[(airline, airport)] = (now, entries)
+            cands = [e for e in entries if _matches(e, pair)]
+            if not fresh:
+                tried.append(label + " (saved)")
+        else:
+            if spent >= max_tries():
+                break
+            spent += 1
+            tried.append(label)
+            cands = _entries(call("schedules", **params))
+        leg = _pick_leg(cands, ride_ts, airport)
+        if leg:
+            ident = clean_flight(leg.get("flight_iata") or leg.get("flight_icao") or label)
+            return leg, ident, tried
+    return None, None, tried
+
+
+def _finish(out, entry, ident):
+    sched, est, act = _ts(entry, "arr_time"), _ts(entry, "arr_estimated"), _ts(entry, "arr_actual")
+    status, delay, final = _status(entry, sched, est)
+    out.update(
+        status=status, delay_minutes=delay, eta=_clock(entry.get("arr_estimated") or entry.get("arr_time")),
+        arrived=_clock(entry.get("arr_actual")) if status == "Landed" else None,
+        terminal=_text(entry.get("arr_terminal")), gate=_text(entry.get("arr_gate")),
+        baggage=_text(entry.get("arr_baggage")), aircraft=_text(entry.get("aircraft_icao")),
+        trackable=str(entry.get("status") or "").lower() == "active", checked_as=ident,
+        operator=airlines.name_of(entry.get("airline_iata") or entry.get("airline_icao")) or None,
+    )
+    return final, act or est or sched
+
+
+def lookup(flight, date=None, time_hhmm=None, airport=None, force=False, track=False, now=None, fetch=None):
     """Live status for one flight. Always returns a dict, never raises."""
-    fetch = fetch or fetch_json
+    now = time.time() if now is None else now
+    raw_fetch = fetch or fetch_json
     code = clean_flight(flight)
-    out = {"flight": code, "configured": True, "status": "Not found", "delay_minutes": 0, "eta": None,
-           "terminal": None, "gate": None, "baggage": None, "aircraft": None, "position": None, "detail": None}
-    if not code:
+    out = _base(code)
+    parsed = split_code(code)
+    if not code or not parsed:
+        out.update(status="Invalid flight", detail="That does not look like a flight number (example: OO 5131).")
         return out
     if not api_key():
         out.update(configured=False, status="API key not set",
                    detail="Add FLIGHT_API_KEY to the .env file and restart the server.")
         return out
-    try:
-        data = fetch("schedules", flight_iata=code)
-        entry = _pick(data.get("response") if isinstance(data, dict) else None, date)
-        if entry is None:
+    airport = (airport or os.environ.get("STATION_AIRPORT") or "").strip().upper()[:3] or None
+    if airport and not re.match(r"^[A-Z]{3}$", airport):
+        airport = None
+    ride_ts = store.local_epoch(date, time_hhmm or "12:00") if date else None
+    out["usage"] = usage(now)
+
+    # 1) too early: AirLabs does not list the flight yet, so do not spend a request on it
+    window = window_hours() * 3600
+    if ride_ts and ride_ts - now > window:
+        out.update(status="Scheduled", early=True,
+                   detail=f"Live data opens about {window_hours()} hours before arrival "
+                          f"({_local_label(ride_ts - window)} station time). Nothing is requested before then.")
+        return out
+
+    key = f"{code}|{date or ''}"
+    with _key_locks[key]:
+        with _lock:
+            cache = _load_cache()
+        saved = cache.get(key)
+
+        # 2) a saved answer that is still fresh (landed/cancelled answers never expire; "Refresh now" skips the
+        #    normal waiting time but not the 2-minute minimum between requests)
+        if saved:
+            ttl = _ttl(saved, ride_ts, now)
+            age = now - saved.get("fetched", 0)
+            too_soon = force and ttl is not None and age < FORCE_MIN
+            fresh = ttl is None or (age < FORCE_MIN if force else age < ttl)
+            if fresh:
+                res = dict(saved["result"], cached=True, age_s=int(age), usage=out["usage"])
+                if too_soon:
+                    res["detail"] = "Refreshed less than 2 minutes ago, so nothing new was requested."
+                return _with_position(res, saved, track, raw_fetch, now)
+
+        # 3) ask AirLabs (counted against the monthly budget)
+        def call(endpoint, **params):
+            _spend(now)
+            return raw_fetch(endpoint, **params)
+
+        try:
+            entry, ident, tried = _resolve(call, parsed, ride_ts, airport, (saved or {}).get("ident"), now)
+        except BudgetError as e:
+            if saved:
+                return dict(saved["result"], cached=True, age_s=int(now - saved.get("fetched", 0)), usage=usage(now),
+                            detail=f"{e}. Showing the last saved answer.")
+            out.update(status="API budget used", detail=f"{e}. Live checks resume next month (or raise LIVE_MONTHLY_BUDGET).",
+                       usage=usage(now))
             return out
-        status, delay = _status(entry)
-        out.update(
-            status=status, delay_minutes=delay,
-            eta=_clock(entry.get("arr_estimated") or entry.get("arr_time")),
-            terminal=_text(entry.get("arr_terminal")), gate=_text(entry.get("arr_gate")),
-            baggage=_text(entry.get("arr_baggage")), aircraft=_text(entry.get("aircraft_icao")),
-        )
-        if str(entry.get("status") or "").lower() == "active":
-            try:
-                out["position"] = _position(code, fetch)
-            except LiveError:
-                pass  # the status is still useful without a map position
-    except LiveError as e:
-        out.update(status="API error", detail=str(e))
-    return out
+        except LiveError as e:
+            if saved:
+                return dict(saved["result"], cached=True, age_s=int(now - saved.get("fetched", 0)), usage=usage(now),
+                            detail=f"{e}. Showing the last saved answer.")
+            out.update(status="API error", detail=str(e), usage=usage(now))
+            return out
+
+        out["tried"] = tried
+        out["usage"] = usage(now)
+        if entry is None:
+            out.update(status="No live data yet",
+                       detail="The flight service has no record of this flight yet (looked for " + ", ".join(tried) + "). "
+                              "Flights usually appear a few hours before departure; it is checked again automatically.")
+            final, best = False, None
+            ident = None
+        else:
+            final, best = _finish(out, entry, ident)
+        with _lock:
+            cache = _load_cache()
+            cache[key] = {"fetched": now, "result": {k: v for k, v in out.items() if k not in ("usage", "cached", "age_s")},
+                          "final": final, "ident": ident, "arr_ts": best}
+            _save_cache(cache, now)
+        if best and ride_ts and best > ride_ts:
+            store.note_live_arrival(code, date, best)  # a late flight is not deleted before it has landed
+        return _with_position(out, {"ident": ident, "result": out}, track, raw_fetch, now)
+
+
+def _local_label(ts):
+    z = store.station_tz()
+    from datetime import datetime
+    return datetime.fromtimestamp(ts, z).strftime("%a %H:%M")
+
+
+def _with_position(res, saved, track, fetch, now):
+    """Adds the plane's position, but only when the map asks for it and the plane is in the air."""
+    if track and res.get("trackable") and saved.get("ident"):
+        try:
+            def call(endpoint, **params):
+                _spend(now)
+                return fetch(endpoint, **params)
+            res["position"] = _position(saved["ident"], call, now)
+        except LiveError:
+            pass  # the status is still useful without a map position
+    return res
