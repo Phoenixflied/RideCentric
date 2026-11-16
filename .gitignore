@@ -4,6 +4,10 @@ users.json
 database.json
 flights.db
 backup1
+manifest_ledger.json
+live_cache.json
+live_usage.json
+*.tmp*
 manifests/*.pdf
 !manifests/.gitkeep
 

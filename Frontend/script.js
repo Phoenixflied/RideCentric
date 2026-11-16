@@ -1,7 +1,7 @@
 const API_BASE = "";
 const TOKEN_KEY = 'ridecentric_token';
 const THEME_KEY = 'rc-theme';
-const DEFAULT_VIEW = { center: [25.7617, -80.1918], zoom: 12 }; // Miami area
+const DEFAULT_VIEW = { center: [32.8998, -97.0403], zoom: 10 }; // Dallas / DFW area
 const TILE_URLS = {
     light: 'https://{s}.basemaps.cartocdn.com/light_all/{z}/{x}/{y}{r}.png',
     dark: 'https://{s}.basemaps.cartocdn.com/dark_all/{z}/{x}/{y}{r}.png'
@@ -13,7 +13,15 @@ const AIRLINES = {
     B6: 'JetBlue', NK: 'Spirit Airlines', AC: 'Air Canada', AM: 'Aeromexico', AF: 'Air France', BF: 'French Bee',
     BA: 'British Airways', VS: 'Virgin Atlantic', LH: 'Lufthansa', KL: 'KLM', IB: 'Iberia', TP: 'TAP Air Portugal',
     TB: 'TUI fly Belgium', QR: 'Qatar Airways', EK: 'Emirates', EY: 'Etihad Airways', TK: 'Turkish Airlines',
-    CX: 'Cathay Pacific', JL: 'Japan Airlines', NH: 'ANA', KE: 'Korean Air', SQ: 'Singapore Airlines'
+    CX: 'Cathay Pacific', JL: 'Japan Airlines', NH: 'ANA', KE: 'Korean Air', SQ: 'Singapore Airlines',
+    // regional carriers that fly under the big airlines' names
+    OO: 'SkyWest Airlines', '9E': 'Endeavor Air', YX: 'Republic Airways', MQ: 'Envoy Air', OH: 'PSA Airlines',
+    PT: 'Piedmont Airlines', YV: 'Mesa Airlines', G7: 'GoJet Airlines', C5: 'CommuteAir', QX: 'Horizon Air',
+    ZW: 'Air Wisconsin', CP: 'Compass Airlines', '9K': 'Cape Air',
+    F9: 'Frontier Airlines', G4: 'Allegiant Air', SY: 'Sun Country', HA: 'Hawaiian Airlines', WS: 'WestJet',
+    '5X': 'UPS Airlines', FX: 'FedEx Express', QF: 'Qantas', NZ: 'Air New Zealand', AI: 'Air India', BR: 'EVA Air',
+    CI: 'China Airlines', LX: 'Swiss', EI: 'Aer Lingus', AZ: 'ITA Airways', Y4: 'Volaris', VB: 'Viva Aerobus',
+    AV: 'Avianca', LA: 'LATAM Airlines', CM: 'Copa Airlines'
 };
 
 let map = null;
@@ -156,8 +164,9 @@ document.addEventListener("DOMContentLoaded", () => {
     // after a fresh login the cover from fx.js stays up for a moment, then lifts to show the dashboard
     const minHold = new Promise((r) => setTimeout(r, 450));
     Promise.all([fetchFlights("ALL"), minHold]).then(() => { if (window.RC) RC.introReveal(); });
+    loadStatus();
     setInterval(() => {
-        if (S.auto && !document.hidden && $('manual-modal-v3').hidden) fetchFlights(S.date, { silent: true });
+        if (S.auto && !document.hidden && $('manual-modal-v3').hidden) { fetchFlights(S.date, { silent: true }); loadStatus(); }
     }, 30000);
 });
 
@@ -278,6 +287,14 @@ function setupEventListeners() {
     // Search, scan, auto-refresh, theme, logout
     $('search-bar').addEventListener('input', () => { S.q = $('search-bar').value; render(); });
     $('scan-btn').addEventListener('click', forceScan);
+    $('upload-btn').addEventListener('click', () => $('upload-input').click());
+    $('upload-input').addEventListener('change', () => uploadManifests($('upload-input').files));
+    const dz = $('data-panel');   // PDFs can also be dropped on the flight list
+    ['dragenter', 'dragover'].forEach((ev) => dz.addEventListener(ev, (e) => {
+        if (e.dataTransfer && Array.from(e.dataTransfer.types || []).includes('Files')) { e.preventDefault(); dz.classList.add('dropping'); }
+    }));
+    ['dragleave', 'drop'].forEach((ev) => dz.addEventListener(ev, () => dz.classList.remove('dropping')));
+    dz.addEventListener('drop', (e) => { if (e.dataTransfer && e.dataTransfer.files.length) { e.preventDefault(); uploadManifests(e.dataTransfer.files); } });
     $('auto').addEventListener('change', () => {
         S.auto = $('auto').checked;
         toast(S.auto ? 'Auto-refresh on (every 30 seconds)' : 'Auto-refresh paused');
@@ -317,6 +334,18 @@ function setupEventListeners() {
         const id = e.target.id;
         if (id === 'd-close') { selectedId = null; render(); }
         else if (id === 'd-list') $('list-card').scrollIntoView({ behavior: 'smooth', block: 'start' });
+        else if (id === 'd-refresh') {
+            const r = getRide(selectedId);
+            if (!r) return;
+            const req = ++liveReq;
+            live = { id: r.id, loading: true, data: null };
+            renderDetail();
+            fetchLiveFlightData(r, true).then((data) => {
+                if (req !== liveReq) return;
+                live = { id: r.id, loading: false, data: data || { status: 'API unavailable', map_url: null } };
+                renderDetail();
+            });
+        }
         else if (id === 'd-track') {
             const r = getRide(selectedId);
             if (r) startFlightTracking(r, live.id === r.id ? live.data : null);
@@ -458,7 +487,7 @@ function renderTable() {
             COLS.map((c) => `<td${c.cell ? ' class="cell-t"' : ''}>${c.td(r)}</td>`).join('') + '</tr>';
     });
     const emptyMsg = rides.length === 0 && S.date === 'ALL'
-        ? 'No flights yet. Put manifest PDFs in the manifests folder and press “Scan PDF”, or use “+ Add flight”.'
+        ? 'No flights yet. Press “Upload PDFs” and choose this month’s manifests (or drop them in the manifests folder), or use “+ Add flight”.'
         : 'No flights match. Try another date, status or search.';
     $('grid').querySelector('tbody').innerHTML = body ||
         `<tr><td class="empty" colspan="${COLS.length}">${emptyMsg}</td></tr>`;
@@ -472,47 +501,115 @@ function renderTable() {
 // PDF SCAN
 // =============================================================================
 
+let sysStatus = null;   // numbers from /api/status (rides kept, next automatic delete, API requests this month)
+
+async function loadStatus() {
+    try {
+        sysStatus = await apiFetch('/api/status');
+    } catch (e) {
+        if (e.auth) return;
+        sysStatus = null;
+    }
+    renderStoreChip();
+}
+
+function renderStoreChip() {
+    const el = $('store-chip');
+    if (!el) return;
+    const s = sysStatus;
+    if (!s) { el.textContent = ''; return; }
+    const parts = [`📦 ${s.rides} ride${s.rides === 1 ? '' : 's'} stored`];
+    if (s.next_purge_ts) {
+        const p = stationParts(s.next_purge_ts * 1000);
+        parts.push(`next auto-delete ${pad(p.h)}:${pad(p.mi)}`);
+    }
+    const u = s.live || {};
+    if (u.configured) parts.push(`✈ API ${u.calls}${u.budget ? '/' + u.budget : ''} this month`);
+    el.textContent = parts.join(' · ');
+    el.title = `Rides are kept for the whole month and deleted ${s.purge_after_minutes} minutes after their arrival. ` +
+        `The flight API is only asked when you open a flight whose live data is due.`;
+}
+
+function scanMessage(r) {
+    const bits = [];
+    if (r.added) bits.push(`${r.added} new ride${r.added === 1 ? '' : 's'} added`);
+    if (r.updated) bits.push(`${r.updated} updated`);
+    if (r.expired) bits.push(`${r.expired} already over (skipped)`);
+    return bits;
+}
+
 async function forceScan() {
     const statusEl = $('scan-status');
     const scanBtn = $('scan-btn');
 
     if (!requireAuth()) return;
 
-    // Disable button and show loading state
     scanBtn.disabled = true;
     scanBtn.innerText = "⏳ Scanning...";
-    if (statusEl) statusEl.innerText = "Processing PDFs...";
+    if (statusEl) statusEl.innerText = "Reading the manifests folder...";
 
     try {
         const result = await apiFetch('/api/scan_manifests', { method: 'POST' });
-
         if (result.status === 'success') {
-            const addedCount = result.added || 0;
-            if (addedCount > 0) {
-                if (statusEl) statusEl.innerText = `✅ Added ${addedCount} new flights`;
-                fetchFlights(S.date); // Refresh the flight list
+            const bits = scanMessage(result);
+            if (result.added || result.updated) {
+                if (statusEl) statusEl.innerText = `✅ ${bits.join(', ')} (${result.files} file${result.files === 1 ? '' : 's'})`;
+                fetchFlights(S.date);
+            } else if (result.errors && result.errors.length) {
+                if (statusEl) statusEl.innerText = `⚠️ ${result.errors[0]}`;
             } else {
-                if (statusEl) statusEl.innerText = `ℹ️ No new flights found`;
+                if (statusEl) statusEl.innerText = result.already ? `ℹ️ Nothing new: ${result.already} file${result.already === 1 ? ' is' : 's are'} already loaded` : 'ℹ️ No new PDFs in the manifests folder';
             }
         } else {
             if (statusEl) statusEl.innerText = `⚠️ ${result.message || 'Scan completed with issues'}`;
         }
-
+        loadStatus();
     } catch (error) {
         if (error.auth) return;
         console.error('Scan failed:', error);
         if (statusEl) statusEl.innerText = `❌ Scan failed: ${error.message}`;
         toast(`PDF scan failed: ${error.message}`, 'err');
     } finally {
-        // Re-enable button and reset text
         scanBtn.disabled = false;
-        scanBtn.innerHTML = "&#8635; Scan PDF";
-
-        // Clear status after 5 seconds
-        setTimeout(() => {
-            if (statusEl) statusEl.innerText = "";
-        }, 5000);
+        scanBtn.innerHTML = "&#8635; Scan folder";
+        setTimeout(() => { if (statusEl) statusEl.innerText = ""; }, 8000);
     }
+}
+
+// Manifest PDFs chosen (or dropped) by the dispatcher: sent one by one; a whole month of rides is stored at once.
+async function uploadManifests(fileList) {
+    const files = Array.from(fileList || []).filter((f) => /\.pdf$/i.test(f.name));
+    const statusEl = $('scan-status');
+    const btn = $('upload-btn');
+    if (!files.length) { toast('Choose one or more manifest PDF files', 'warn'); return; }
+    if (!requireAuth()) return;
+    btn.disabled = true;
+    const total = { added: 0, updated: 0, expired: 0, already: 0, ok: 0, errors: [] };
+    for (let i = 0; i < files.length; i++) {
+        const f = files[i];
+        if (statusEl) statusEl.innerText = `Reading ${f.name} (${i + 1}/${files.length})...`;
+        try {
+            const r = await apiFetch(`/api/upload_manifest?name=${encodeURIComponent(f.name)}`, {
+                method: 'POST', headers: { 'Content-Type': 'application/pdf' }, body: f
+            });
+            total.ok++;
+            if (r.already_loaded) total.already++;
+            total.added += r.added || 0; total.updated += r.updated || 0; total.expired += r.expired || 0;
+        } catch (e) {
+            if (e.auth) return;
+            total.errors.push(`${f.name}: ${e.message}`);
+        }
+    }
+    btn.disabled = false;
+    $('upload-input').value = '';
+    const bits = scanMessage(total);
+    if (total.already) bits.push(`${total.already} file${total.already === 1 ? '' : 's'} already loaded`);
+    const msg = (bits.length ? bits.join(', ') : (total.ok ? 'nothing new' : '')) + (total.errors.length ? (bits.length || total.ok ? ' · ' : '') + total.errors[0] : '');
+    if (statusEl) statusEl.innerText = (total.errors.length ? '⚠️ ' : '✅ ') + msg;
+    toast(msg || 'Upload finished', total.errors.length ? 'warn' : 'ok');
+    setTimeout(() => { if (statusEl) statusEl.innerText = ''; }, 10000);
+    fetchFlights(S.date);
+    loadStatus();
 }
 
 // =============================================================================
@@ -544,7 +641,7 @@ function showFlightDetails(ride) {
 
     // Fetch live flight data from external API (after a short pause: skimming through flights must not burn API quota)
     clearTimeout(liveTimer);
-    liveTimer = setTimeout(() => fetchLiveFlightData(ride.flight, ride.date)
+    liveTimer = setTimeout(() => fetchLiveFlightData(ride)
         .then((data) => {
             if (req !== liveReq) return; // another flight was selected meanwhile
             live = { id: ride.id, loading: false, data: data || { status: 'API unavailable', map_url: null } };
@@ -568,7 +665,7 @@ function liveClass(status) {
     if (s.startsWith('on time')) return 'live-ok';
     if (s.startsWith('landed')) return 'live-ok';
     if (s.startsWith('in air')) return 'live-air';
-    if (s.startsWith('delayed')) return 'live-late';
+    if (s.startsWith('delayed') || s.includes('budget')) return 'live-late';
     if (s.startsWith('cancel') || s.includes('error') || s.includes('unavailable')) return 'live-bad';
     return '';
 }
@@ -596,6 +693,21 @@ function renderDetail() {
     } else {
         liveHtml = '<span class="muted">—</span>';
     }
+    const meta = [];
+    if (live.id === r.id && live.data && !live.loading) {
+        if (ld.checked_as) meta.push('Checked as ' + ld.checked_as);
+        if (ld.operator) meta.push('Operated by ' + ld.operator);
+        if (ld.cached) meta.push('saved copy from ' + (ld.age_s >= 90 ? Math.round(ld.age_s / 60) + ' min' : 'moments') + ' ago');
+        else if (ld.configured !== false && !ld.early && ld.status !== 'API Error') meta.push('checked just now');
+    }
+    const canRefresh = live.id === r.id && live.data && !live.loading && ld.configured !== false && !ld.early && ld.status !== 'API Error' &&
+        !/^(landed|cancelled)/i.test(ld.status || '');
+    const removeAt = (() => {
+        if (!r.whenTs) return '';
+        const mins = (sysStatus && sysStatus.purge_after_minutes) || 60;
+        const p = stationParts(r.whenTs + mins * 60000), d = `${p.y}-${pad(p.m)}-${pad(p.d)}`;
+        return `${d === r.date ? '' : d + ' '}${pad(p.h)}:${pad(p.mi)}`;
+    })();
     c.innerHTML =
         '<div class="dtitle"><span>Flight details</span><span><button type="button" class="to-list" id="d-list">↑ List</button> ' +
         '<button type="button" id="d-close" aria-label="Clear selection" title="Clear selection">&times;</button></span></div>' +
@@ -606,9 +718,12 @@ function renderDetail() {
         fact('Terminal', ld.terminal && r.terminal === 'TBD' ? ld.terminal : r.terminal) +
         fact('Gate', ld.gate && r.gate === 'TBD' ? ld.gate : r.gate) + fact('Type', r.run_type) +
         fact('Passenger', r.passenger) +
-        (ld.eta ? fact('ETA', ld.eta) : '') + (ld.baggage ? fact('Baggage', ld.baggage) : '') + (ld.aircraft ? fact('Aircraft', ld.aircraft) : '') +
+        (r.pax != null ? fact('Passengers', r.pax) : '') + (r.bags != null ? fact('Bags', r.bags) : '') +
+        (removeAt ? fact('Auto-removes', removeAt) : '') +
+        (ld.arrived ? fact('Landed at', ld.arrived) : '') + (ld.eta ? fact('ETA', ld.eta) : '') + (ld.baggage ? fact('Baggage', ld.baggage) : '') + (ld.aircraft ? fact('Aircraft', ld.aircraft) : '') +
         '</div>' +
         `<div class="apistate"><span class="muted">Live status</span>${liveHtml}</div>` +
+        (meta.length ? `<div class="apimeta">${esc(meta.join(' · '))}${canRefresh ? ' <button type="button" class="tbtn" id="d-refresh">↻ Refresh now</button>' : ''}</div>` : '') +
         (ld.detail ? `<div class="apihint">${esc(ld.detail)}</div>` : '');
 }
 
@@ -618,15 +733,24 @@ function renderDetail() {
 // Looked up by the backend (live.py) with the airline API key from the server's .env file,
 // so the key never reaches the browser.
 
-async function fetchLiveFlightData(flightNumber, date) {
-    const path = `/api/live?flight=${encodeURIComponent(flightNumber)}&date=${encodeURIComponent(date || '')}`;
+function livePath(ride, extra) {
+    const q = [`flight=${encodeURIComponent(ride.flight)}`, `date=${encodeURIComponent(ride.date || '')}`,
+        `time=${encodeURIComponent(ride.arrival_time || '')}`];
+    if (ride.airport) q.push(`airport=${encodeURIComponent(ride.airport)}`);
+    return `/api/live?${q.join('&')}${extra || ''}`;
+}
+
+// force = the "Refresh now" button (the server still keeps its 2-minute minimum between requests)
+async function fetchLiveFlightData(ride, force) {
     try {
-        const data = await apiFetch(path);
-        // map_url is the same backend call: while the plane is airborne it also carries its position
-        return Object.assign({}, data, { map_url: data.position ? path : null });
+        const data = await apiFetch(livePath(ride, force ? '&force=1' : ''));
+        // map_url is the same backend call plus track=1: only then does the server fetch the plane's position
+        return Object.assign({}, data, { map_url: data.trackable || data.position ? livePath(ride, '&track=1') : null });
     } catch (error) {
         if (!error.auth) console.error('Live status error:', error);
         return { status: 'API Error', detail: error.message, map_url: null };
+    } finally {
+        if (!force) setTimeout(loadStatus, 0); else loadStatus();
     }
 }
 
@@ -651,7 +775,7 @@ async function startFlightTracking(ride, flightData) {
         clearFlightTracking(false);
 
         // Fetch initial flight data (re-use what the details card already loaded)
-        flightData = flightData || await fetchLiveFlightData(ride.flight, ride.date);
+        flightData = flightData || await fetchLiveFlightData(ride);
 
         if (!flightData || !flightData.map_url) {
             toast('Flight tracking data not available', 'warn');
@@ -837,7 +961,7 @@ function clearFlightTracking(resetView = true) {
     if (trackingPanel) trackingPanel.remove();
 
     if (map && resetView) {
-        // Reset map view to default (Miami area)
+        // Reset map view to default (Dallas area)
         map.setView(DEFAULT_VIEW.center, DEFAULT_VIEW.zoom);
         $('map-hint').textContent = 'Select a flight, then press “Track on map” to follow it.';
     }
@@ -852,8 +976,8 @@ function clearFlightTracking(resetView = true) {
 
 const STATION_KEY = 'rc-station';
 const STATIONS = [
+    { id: 'America/Chicago', label: 'Dallas / Chicago' },
     { id: 'America/New_York', label: 'Miami / New York' },
-    { id: 'America/Chicago', label: 'Chicago / Dallas' },
     { id: 'America/Denver', label: 'Denver' },
     { id: 'America/Los_Angeles', label: 'Los Angeles' },
     { id: 'Europe/London', label: 'London' },
@@ -861,7 +985,7 @@ const STATIONS = [
     { id: 'UTC', label: 'UTC' },
     { id: '', label: 'This computer' }
 ];
-let stationTz = 'America/New_York';   // the map starts on Miami, so Miami time is the default
+let stationTz = 'America/Chicago';   // the map starts on Dallas, so Dallas time is the default
 const _dtf = {};
 
 function dtf(tz) {
@@ -956,7 +1080,7 @@ function renderNext() {
         el.className = 'nextarr idle';
         el.removeAttribute('data-ts');
         el.innerHTML = label + '<div class="na-idle">No upcoming arrivals</div>' +
-            `<div class="na-sub">${last ? `Latest on this board: ${esc(last.flight)}, ${esc(last.date)} ${esc(last.arrival_time)}` : 'Scan manifests or add a flight to get started.'}</div>`;
+            `<div class="na-sub">${last ? `Latest on this board: ${esc(last.flight)}, ${esc(last.date)} ${esc(last.arrival_time)}` : 'Upload the month’s manifests or add a flight to get started.'}</div>`;
         return;
     }
     el.setAttribute('data-ts', r.whenTs);

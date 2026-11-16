@@ -1,10 +1,8 @@
-import json
+import asyncio
 import os
-import re
 import sys
-import pdfplumber
 from datetime import datetime
-from fastapi import FastAPI, HTTPException, Query, Body
+from fastapi import FastAPI, HTTPException, Query, Request
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
@@ -16,6 +14,8 @@ sys.path.insert(0, BASE_DIR)
 
 import live  # noqa: E402  (live flight lookup; reads FLIGHT_API_KEY from .env)
 live.load_env(os.path.join(BASE_DIR, ".env"))
+import manifest  # noqa: E402  (reads the RideCentric manifest PDFs)
+import store  # noqa: E402  (keeps the month of rides and deletes each one 1 hour after arrival)
 
 app = FastAPI(title="RideCentric Dispatch API")
 
@@ -31,8 +31,6 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-DB_FILE = 'database.json'
-MANIFEST_DIR = 'manifests'
 USERS_FILE = 'users.json'
 
 # Simple in-memory token store (session tokens)
@@ -49,23 +47,20 @@ class FlightEntry(BaseModel):
     gate: Optional[str] = "TBD"
     status: str = "SCHEDULED"
     run_type: str = "ARRIVAL"
+    airport: Optional[str] = None
+    pax: Optional[int] = None
+    bags: Optional[int] = None
+    source: Optional[str] = None
 
 class UserCredentials(BaseModel):
     username: str = ""
     password: str = ""
 
 def load_db() -> List[dict]:
-    if not os.path.exists(DB_FILE):
-        return []
-    with open(DB_FILE, 'r') as f:
-        try:
-            return json.load(f)
-        except json.JSONDecodeError:
-            return []
+    return store.load_db()
 
 def save_db(data: List[dict]):
-    with open(DB_FILE, 'w') as f:
-        json.dump(data, f, indent=4)
+    store.save_db(data)
 
 # user store utilities
 def load_users() -> List[dict]:
@@ -87,14 +82,6 @@ def hash_password(password: str) -> str:
 
 def verify_password(password: str, stored: str) -> bool:
     return hash_password(password) == stored
-
-@app.get("/api/flights")
-async def get_flights(date: str = "ALL", token: Optional[str] = Query(None)):
-    require_token(token)
-    db = load_db()
-    if date == "ALL":
-        return db
-    return [r for r in db if r.get('date') == date]
 
 # authentication helpers
 
@@ -144,6 +131,7 @@ async def signup_alias(credentials: UserCredentials):
 @app.get('/api/flights')
 async def get_flights(date: str = "ALL", token: Optional[str] = Query(None)):
     require_token(token)
+    store.purge_if_due()  # rides whose time is over are removed before the list is sent
     db = load_db()
     if date == "ALL":
         return db
@@ -153,67 +141,78 @@ async def get_flights(date: str = "ALL", token: Optional[str] = Query(None)):
 async def get_flights_alias(date: str = "ALL", token: Optional[str] = Query(None)):
     return await get_flights(date, token)
 
+def _flag(value) -> bool:
+    return str(value or "").strip().lower() in ("1", "true", "yes")
+
 @app.get('/api/live')
-def live_flight(flight: str, date: Optional[str] = None, token: Optional[str] = Query(None)):
+def live_flight(flight: str, date: Optional[str] = None, time: Optional[str] = None, airport: Optional[str] = None,
+                force: Optional[str] = None, track: Optional[str] = None, token: Optional[str] = Query(None)):
     """Live status of one flight. Looked up here so the airline API key never reaches the browser.
+    Answers come from the saved copy when it is still fresh, so the API is only used when it is needed.
     (A plain `def` on purpose: FastAPI runs it in a worker thread, so the web request to AirLabs does not block the server.)"""
     require_token(token)
-    return live.lookup(flight, date)
+    return live.lookup(flight, date, time, airport, force=_flag(force), track=_flag(track))
+
+@app.get('/api/status')
+def system_status(token: Optional[str] = Query(None)):
+    """Numbers for the dashboard's storage chip: rides kept, next automatic delete, API requests used this month."""
+    require_token(token)
+    out = store.summary()
+    out["live"] = dict(live.usage(), configured=bool(live.api_key()), window_hours=live.window_hours())
+    return out
 
 @app.post('/api/add_manual')
 async def add_manual(entry: FlightEntry, token: Optional[str] = Query(None)):
     require_token(token)
-    db = load_db()
-    # Check for duplicates
-    if any(item['ride_no'] == entry.ride_no and item['date'] == entry.date for item in db):
-        raise HTTPException(status_code=400, detail="Flight already exists")
-    
-    db.append(entry.dict())
-    save_db(db)
+    with store._lock:
+        db = load_db()
+        # Check for duplicates
+        if any(item.get('ride_no') == entry.ride_no and item.get('date') == entry.date for item in db):
+            raise HTTPException(status_code=400, detail="Flight already exists")
+        db.append(entry.dict())
+        save_db(db)
     return {"status": "success", "added": entry.flight}
+
+MAX_UPLOAD = manifest.MAX_PDF_BYTES
+
+@app.post("/api/upload_manifest")
+async def upload_manifest(request: Request, name: str = "manifest.pdf", token: Optional[str] = Query(None)):
+    """Loads one manifest PDF (sent as the raw request body). A whole month in one file is stored at once;
+    uploading the same file again changes nothing."""
+    require_token(token)
+    try:
+        declared = int(request.headers.get("content-length") or 0)
+    except ValueError:
+        declared = 0
+    if declared > MAX_UPLOAD:
+        raise HTTPException(status_code=413, detail="That PDF is too large (limit 25 MB).")
+    body = await request.body()
+    if len(body) > MAX_UPLOAD:
+        raise HTTPException(status_code=413, detail="That PDF is too large (limit 25 MB).")
+    clean = "".join(c for c in os.path.basename(name or "") if c.isprintable())[:120] or "manifest.pdf"
+    try:
+        result = await asyncio.get_running_loop().run_in_executor(None, store.load_manifest_bytes, body, clean)
+    except manifest.ManifestError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+    return {"status": "success", **result}
 
 @app.post("/api/scan_manifests")
 async def scan_manifests(token: Optional[str] = Query(None)):
+    """Loads every new PDF found in the manifests/ folder (the same thing the server does by itself every few minutes)."""
     require_token(token)
-    if not os.path.exists(MANIFEST_DIR):
-        os.makedirs(MANIFEST_DIR)
-        return {"status": "error", "message": "Manifests folder created. Please add PDFs."}
-
-    db = load_db()
-    new_count = 0
-    
-    for filename in os.listdir(MANIFEST_DIR):
-        if filename.endswith(".pdf"):
-            path = os.path.join(MANIFEST_DIR, filename)
-            with pdfplumber.open(path) as pdf:
-                full_text = "".join([page.extract_text() or "" for page in pdf.pages])
-                
-                # YOUR ORIGINAL PARSING LOGIC (Regex)
-                # This matches Ride #, Flight, and Time
-                matches = re.findall(r"Ride #:\s*(\d+).*?Flight:\s*([A-Z0-9 ]+).*?Arrival:\s*(\d{2}:\d{2})", full_text, re.S)
-                
-                for r_no, fl, tm in matches:
-                    if not any(x['ride_no'] == r_no for x in db):
-                        db.append({
-                            "id": f"PDF-{r_no}",
-                            "flight": fl.strip(),
-                            "arrival_time": tm,
-                            "date": datetime.now().strftime("%Y-%m-%d"),
-                            "ride_no": r_no,
-                            "passenger": "REDACTED",
-                            "terminal": "TBD",
-                            "gate": "TBD",
-                            "status": "ARRIVING",
-                            "run_type": "ARRIVAL"
-                        })
-                        new_count += 1
-    
-    save_db(db)
-    return {"status": "success", "added": new_count}
+    res = await asyncio.get_running_loop().run_in_executor(None, store.scan_folder)
+    if res["errors"] and not (res["files"] or res["already"]):
+        return {"status": "error", "message": res["errors"][0], **res}
+    return {"status": "success", **res}
 
 @app.post('/scan_manifests')
 async def scan_manifests_alias(token: Optional[str] = Query(None)):
     return await scan_manifests(token)
+
+# Clean up now, then keep cleaning (and watching manifests/ for new PDFs) in the background.
+store.purge()
+if os.environ.get("RIDECENTRIC_NO_BACKGROUND") != "1":
+    store.start_background()
 
 if __name__ == "__main__":
     import uvicorn
