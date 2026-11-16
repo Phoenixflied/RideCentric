@@ -5,11 +5,11 @@
     <meta name="viewport" content="width=device-width, initial-scale=1">
     <title>RideCentric LIVE | Dispatch</title>
     <script>
-        // Apply the saved theme before first paint (avoids a light flash in dark mode)
-        try { if (localStorage.getItem('rc-theme') === 'dark') document.documentElement.setAttribute('data-theme', 'dark'); } catch (e) {}
         // Coming straight from the login page? Then play the entrance animation once (a plain reload skips it).
         try { if (sessionStorage.getItem('rc-intro') === '1') { sessionStorage.removeItem('rc-intro'); document.documentElement.classList.add('intro-pending'); } } catch (e) {}
     </script>
+    <!-- the time-of-day sky and Bright / Dark mode: runs before the first paint so the right colours are there at once -->
+    <script src="/app/sky.js"></script>
     <link rel="icon" type="image/png" href="/app/img/favicon.png">
     <link rel="stylesheet" href="/app/Style.css">
     <link href="https://fonts.googleapis.com/css2?family=Montserrat:wght@400;500;600;700&display=swap" rel="stylesheet">
@@ -30,7 +30,8 @@
             <select class="station" id="station" aria-label="Dispatch time zone" title="Time zone used for the clock, &quot;Today&quot; and the countdowns"></select>
             <span id="clock" class="num" title="">00:00:00</span>
             <button class="icon-btn" id="help-btn" type="button" aria-label="Keyboard shortcuts" title="Keyboard shortcuts (?)">?</button>
-            <button class="icon-btn" id="theme-btn" type="button" aria-label="Toggle dark mode" title="Dark / light (D)"></button>
+            <button class="sky-btn on" id="sky-btn" type="button" aria-pressed="true" title="Time-of-day sky (S)"><span class="sky-ico"></span><span class="sky-lbl">Sky</span><span class="sky-sw" aria-hidden="true"></span></button>
+            <button class="icon-btn" id="theme-btn" type="button" aria-label="Toggle dark mode" title="Bright / Dark (D)"></button>
             <div class="user-chip" title="Signed in"><span class="avatar" id="avatar">?</span><span id="whoami"></span></div>
             <button class="logout" id="logout-btn" type="button">Logout</button>
         </div>
@@ -108,7 +109,8 @@
                     <span><kbd>A</kbd></span><span>Add a flight</span>
                     <span><kbd>R</kbd></span><span>Refresh now</span>
                     <span><kbd>E</kbd></span><span>Export what you see as CSV</span>
-                    <span><kbd>D</kbd></span><span>Dark / light theme</span>
+                    <span><kbd>D</kbd></span><span>Bright / Dark mode</span>
+                    <span><kbd>S</kbd></span><span>Time-of-day sky on / off</span>
                     <span><kbd>?</kbd></span><span>Show this help</span>
                     <span><kbd>Esc</kbd></span><span>Close a window / leave the search box</span>
                 </div>
