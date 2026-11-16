@@ -871,8 +871,10 @@ function tickNext() {
     const el = $('nextarr'), c = $('na-count');
     if (!el || !c || !el.getAttribute('data-ts')) return;
     const diff = +el.getAttribute('data-ts') - Date.now();
-    c.textContent = diff <= 60000 ? 'Arriving now' : 'in ' + fmtCountdown(diff);
-    el.className = 'nextarr' + (diff <= 60000 ? ' now' : diff <= 30 * 60000 ? ' soon' : '');
+    const txt = diff <= 60000 ? 'Arriving now' : 'in ' + fmtCountdown(diff);
+    const cls = 'nextarr' + (diff <= 60000 ? ' now' : diff <= 30 * 60000 ? ' soon' : '');
+    if (c.textContent !== txt) c.textContent = txt;      // write only what changed
+    if (el.className !== cls) el.className = cls;
 }
 
 // Which day the timeline shows: the chosen date; with "all dates" today if it has flights, else the next one, else the latest.

@@ -436,8 +436,6 @@ kbd { display: inline-block; min-width: 22px; padding: 2px 7px; border: 1px soli
 [data-theme="dark"] .rt-chip { color: var(--green); }
 .rt-sub { font-size: 11px; font-weight: 600; color: var(--muted); letter-spacing: 0; }
 .rt-note { margin-top: 3px; font-size: 10.5px; color: var(--muted); }
-.rt-live { flex: none; display: inline-flex; align-items: center; gap: 6px; font-size: 9.5px; font-weight: 700; letter-spacing: .08em; text-transform: uppercase; color: var(--muted); background: color-mix(in srgb, var(--surface) 82%, transparent); border: 1px solid var(--line); border-radius: 999px; padding: 3px 10px 3px 8px; }
-.rt-live i { width: 6px; height: 6px; border-radius: 50%; background: var(--green); animation: pulse 1.6s infinite; }
 .rt-hint { position: absolute; left: 50%; bottom: 20px; transform: translateX(-50%); max-width: calc(100% - 190px); text-align: center; font-weight: 600; font-size: 11.5px; color: var(--muted); background: color-mix(in srgb, var(--surface) 88%, transparent); border: 1px solid var(--line); border-radius: 999px; padding: 7px 16px; z-index: 2; box-shadow: var(--shadow); }
 .rt-foot { flex: none; z-index: 2; background: var(--surface); border-top: 1px solid var(--line); padding: 11px 16px 13px; }
 .rt-ctl { position: absolute; right: 12px; bottom: 12px; z-index: 3; display: flex; flex-direction: column; border: 1px solid var(--line); border-radius: 9px; overflow: hidden; background: var(--surface); box-shadow: var(--shadow); }
@@ -451,7 +449,7 @@ kbd { display: inline-block; min-width: 22px; padding: 2px 7px; border: 1px soli
 .rt-stage.used .rt-tip { opacity: 0; }
 @keyframes tipOut { to { opacity: 0; } }
 .rt-bar { height: 6px; border-radius: 999px; background: var(--line); overflow: hidden; margin-bottom: 10px; }
-.rt-bar i { display: block; height: 100%; border-radius: 999px; background: linear-gradient(90deg, var(--green-d), var(--green)); transition: width 1s linear; }
+.rt-bar i { display: block; height: 100%; border-radius: 999px; background: linear-gradient(90deg, var(--green-d), var(--green)); }
 .rt-info { display: grid; grid-template-columns: repeat(auto-fit, minmax(110px, 1fr)); gap: 8px 14px; }
 .rt-info label { display: block; font-size: 8.5px; font-weight: 700; letter-spacing: .1em; text-transform: uppercase; color: var(--muted); margin-bottom: 1px; }
 .rt-info b { font-size: 13px; font-weight: 700; font-variant-numeric: tabular-nums; }
@@ -531,7 +529,6 @@ kbd { display: inline-block; min-width: 22px; padding: 2px 7px; border: 1px soli
 
 @media (max-width: 760px) {
   .rt-title { font-size: 16px; }
-  .rt-live { display: none; }
   .rt-tip { display: none; }
   .sky-lbl { display: none; }
   .rt-hint { max-width: calc(100% - 70px); }
@@ -551,13 +548,15 @@ html.sky-on { background: linear-gradient(180deg, var(--sky0) 0%, var(--sky1) 52
 html.sky-on body { background: transparent; }
 #sky { display: none; position: fixed; inset: 0; z-index: 0; pointer-events: none; overflow: hidden; }
 html.sky-on #sky { display: block; }
-.sk-sun { position: absolute; width: 300px; height: 300px; margin: -150px 0 0 -150px; border-radius: 50%; --core: #fff8dc; --glow: #ffd55e;
-  background: radial-gradient(circle, var(--core) 0 9%, var(--glow) 14%, color-mix(in srgb, var(--glow) 42%, transparent) 30%, color-mix(in srgb, var(--glow) 14%, transparent) 52%, transparent 72%); transition: left 20s linear, top 20s linear, opacity 3s; }
-.sk-moon { position: absolute; width: 96px; height: 96px; margin: -48px 0 0 -48px; filter: drop-shadow(0 0 30px rgba(255, 244, 200, .55)); transition: left 20s linear, top 20s linear, opacity 3s; }
+.sk-sun { position: absolute; left: 0; top: 0; width: 300px; height: 300px; margin: -150px 0 0 -150px; border-radius: 50%; --core: #fff8dc; --glow: #ffd55e;
+  background: radial-gradient(circle, var(--core) 0 9%, var(--glow) 14%, color-mix(in srgb, var(--glow) 42%, transparent) 30%, color-mix(in srgb, var(--glow) 14%, transparent) 52%, transparent 72%); transition: transform 2s ease, opacity 3s; }
+.sk-moon { position: absolute; left: 0; top: 0; width: 96px; height: 96px; margin: -48px 0 0 -48px; filter: drop-shadow(0 0 30px rgba(255, 244, 200, .55)); transition: transform 2s ease, opacity 3s; }
 .mn-dark { fill: rgba(40, 52, 92, .55); }
 .mn-lit { fill: #f6f1d8; }
 .sk-stars { position: absolute; inset: 0; transition: opacity 3s; }
-.sk-stars i { position: absolute; border-radius: 50%; background: #fff; box-shadow: 0 0 5px 1px rgba(255, 255, 255, .55); animation: twinkle 4s ease-in-out infinite; }
+.sk-stars i { position: absolute; border-radius: 50%; background: #fff; box-shadow: 0 0 5px 1px rgba(255, 255, 255, .55); }
+.sk-stars i.tw { animation: twinkle 4s ease-in-out infinite; }
+.sk-stars.rest i, .sk-clouds.rest i { animation-play-state: paused; }
 @keyframes twinkle { 0%, 100% { opacity: .25; } 50% { opacity: 1; } }
 .sk-clouds { position: absolute; inset: 0; transition: opacity 3s; }
 .sk-clouds i { position: absolute; left: -30%; border-radius: 999px; background: var(--cloud, #fff); filter: blur(28px); animation: skDrift 190s linear infinite; }
@@ -575,6 +574,6 @@ html.sky-on .grid tbody tr.row:nth-child(even) { background: color-mix(in srgb, 
 html.sky-on .grid tbody tr.row:hover { background: var(--hover); }
 html.sky-on .grid tbody tr.row.sel, html.sky-on .grid tbody tr.row.sel:nth-child(even) { background: var(--sel); }
 html.sky-on .grid tr.sep td { background: color-mix(in srgb, var(--surface2) 78%, transparent); }
-html.sky-on .sum { background: color-mix(in srgb, var(--surface) 82%, transparent); -webkit-backdrop-filter: blur(10px); backdrop-filter: blur(10px); }
+html.sky-on .sum { background: color-mix(in srgb, var(--surface) 86%, transparent); }
 html.sky-on .sum.on { background: var(--green-weak); }
 html.sky-on .rt-foot { background: color-mix(in srgb, var(--surface) 88%, transparent); }

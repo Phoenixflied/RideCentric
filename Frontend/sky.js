@@ -126,10 +126,19 @@
         return elev < (cur === 'dark' ? -3 : -5) ? 'dark' : 'light';   // a small gap so it does not flip back and forth at dusk and dawn
     }
 
+    function hexGap(a, b) {                                            // largest difference in any colour channel (0..255)
+        let g = 0;
+        for (let i = 1; i < 7; i += 2) g = Math.max(g, Math.abs(parseInt(a.substr(i, 2), 16) - parseInt(b.substr(i, 2), 16)));
+        return g;
+    }
+
     function applyColors(sun, theme) {
         const night = clamp(-sun.elev / 18, 0, 1);
         const base = skyColors(sun.elev, sun.rising);
         const out = base.map((c) => theme === 'dark' ? mix(c, '#0a1017', 0.66) : mix(c, '#ffffff', 0.3 + 0.18 * night));
+        const last = state.cols;
+        if (last && last.theme === theme && out.every((c, i) => hexGap(c, last.out[i]) < 3)) return;
+        state.cols = { theme, out };
         root.style.setProperty('--sky0', out[0]);
         root.style.setProperty('--sky1', out[1]);
         root.style.setProperty('--sky2', out[2]);
@@ -169,9 +178,11 @@
         let stars = '';
         let seed = 7;
         const rnd = () => { seed = (seed * 16807) % 2147483647; return seed / 2147483647; };
-        for (let i = 0; i < 80; i++) {
+        for (let i = 0; i < 64; i++) {
             const sz = (0.9 + rnd() * 1.9).toFixed(1);
-            stars += `<i style="left:${(rnd() * 100).toFixed(1)}%;top:${(rnd() * 78).toFixed(1)}%;width:${sz}px;height:${sz}px;animation-delay:${(rnd() * 6).toFixed(1)}s;animation-duration:${(3 + rnd() * 4).toFixed(1)}s"></i>`;
+            const tw = i % 3 === 0;                                   // only a third twinkle: fewer animations to run
+            stars += `<i${tw ? ' class="tw"' : ''} style="left:${(rnd() * 100).toFixed(1)}%;top:${(rnd() * 78).toFixed(1)}%;width:${sz}px;height:${sz}px;` +
+                (tw ? `animation-delay:${(rnd() * 6).toFixed(1)}s;animation-duration:${(3 + rnd() * 4).toFixed(1)}s` : 'opacity:.7') + '"></i>';
         }
         el.innerHTML = `<div class="sk-stars">${stars}</div><div class="sk-clouds"><i class="c1"></i><i class="c2"></i><i class="c3"></i></div>` +
             '<div class="sk-sun"></div><div class="sk-moon"></div>';
@@ -189,7 +200,7 @@
         const sy = 42 - (Math.max(sun.elev, -8) / Math.max(12, sun.maxElev)) * 32;        // the arc stays in the upper part of the screen
         const sunEl = el.querySelector('.sk-sun');
         const low = clamp(1 - sun.elev / 25, 0, 1);                              // low sun is orange
-        sunEl.style.left = sx.toFixed(2) + '%'; sunEl.style.top = sy.toFixed(2) + '%';
+        sunEl.style.transform = `translate(${sx.toFixed(2)}vw, ${sy.toFixed(2)}vh)`;
         sunEl.style.opacity = (clamp((sun.elev + 6) / 8, 0, 1) * dim).toFixed(3);
         sunEl.style.setProperty('--core', mix('#fff8dc', '#ffe0a8', low));
         sunEl.style.setProperty('--glow', mix('#ffd55e', '#ff8f45', low));
@@ -198,12 +209,16 @@
         const f = clamp((Hn - sun.H0) / Math.max(1, 360 - 2 * sun.H0), 0, 1);
         const mx = 8 + 84 * f, my = 40 - 30 * Math.sin(Math.PI * f);
         const moonEl = el.querySelector('.sk-moon');
-        moonEl.style.left = mx.toFixed(2) + '%'; moonEl.style.top = my.toFixed(2) + '%';
+        moonEl.style.transform = `translate(${mx.toFixed(2)}vw, ${my.toFixed(2)}vh)`;
         moonEl.style.opacity = (night * (theme === 'dark' ? 0.9 : 0.8)).toFixed(3);
         const mp = Math.round(moonPhase(ms) * 60);                               // redraw only when the phase moves a little
         if (moonEl.dataset.p !== String(mp)) { moonEl.dataset.p = String(mp); moonEl.innerHTML = moonSvg(mp / 60); }
-        el.querySelector('.sk-stars').style.opacity = (night * 0.95).toFixed(3);
-        el.querySelector('.sk-clouds').style.opacity = (clamp(sun.elev / 8 + 0.5, 0, 1) * (theme === 'dark' ? 0.18 : 0.55)).toFixed(3);
+        const starsEl = el.querySelector('.sk-stars'), cloudsEl = el.querySelector('.sk-clouds');
+        const cloudOp = clamp(sun.elev / 8 + 0.5, 0, 1) * (theme === 'dark' ? 0.18 : 0.55);
+        starsEl.style.opacity = (night * 0.95).toFixed(3);
+        cloudsEl.style.opacity = cloudOp.toFixed(3);
+        starsEl.classList.toggle('rest', night < 0.01);                          // nothing animates while it cannot be seen
+        cloudsEl.classList.toggle('rest', cloudOp < 0.01);
         el.style.setProperty('--cloud', mix('#ffffff', '#ffc9a6', low * 0.8));
     }
 
@@ -278,7 +293,8 @@
         state.reduced = !!(window.matchMedia && window.matchMedia('(prefers-reduced-motion: reduce)').matches);
         refresh();
         if (state.timer) clearInterval(state.timer);
-        state.timer = setInterval(() => refresh(), 20000);
+        state.timer = setInterval(() => { if (!document.hidden) refresh(); }, 60000);        // the sun moves slowly; nothing to do in a hidden tab
+        document.addEventListener('visibilitychange', () => { if (!document.hidden) refresh(); });
     }
 
     // the login page has its own Bright/Dark button: take over whatever it just set
