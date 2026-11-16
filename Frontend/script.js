@@ -726,7 +726,7 @@ function renderDetail() {
         fact('Terminal', ld.terminal && r.terminal === 'TBD' ? ld.terminal : r.terminal) +
         fact('Gate', ld.gate && r.gate === 'TBD' ? ld.gate : r.gate) + fact('Type', r.run_type) +
         fact('Passenger', r.passenger) +
-        (r.pax != null ? fact('Passengers', r.pax) : '') + (r.bags != null ? fact('Bags', r.bags) : '') +
+        (r.pax != null ? fact('Pax', r.pax) : '') + (r.bags != null ? fact('Bags', r.bags) : '') +
         (removeAt ? fact('Auto-removes', removeAt) : '') +
         (ld.arrived ? fact('Landed at', ld.arrived) : '') + (ld.eta ? fact('ETA', ld.eta) : '') + (ld.baggage ? fact('Baggage', ld.baggage) : '') + (ld.aircraft ? fact('Aircraft', ld.aircraft) : '') +
         '</div>' +
