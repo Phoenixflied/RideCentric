@@ -3,13 +3,15 @@
 Standard library only. The API key is read from FLIGHT_API_KEY (the .env file next to main.py). It is only used
 here on the server: it never reaches the browser and never appears in anything lookup() returns.
 
-How the API is used only when it is needed
-  * Nothing is requested for a flight whose arrival is further away than LIVE_WINDOW_HOURS (default 10): AirLabs
-    does not list those yet. The dashboard says "Scheduled" and when live data opens, instead of "not found".
-  * Answers are remembered (live_cache.json). A flight is re-checked at most every 30 min while it is hours away,
-    every 10 min within 3 h, every 3 min around landing, and never again once it has landed or been cancelled.
+When the API is used (and when it is not)
+  * ONLY for flights arriving TODAY (station time, STATION_TZ). Yesterday's and tomorrow's flights never cost a request.
+    What was learned on the day (status, route, times) is saved on the ride and shown afterwards for free.
+  * ONLY when somebody opens the flight: nothing runs in the background.
+  * Answers are remembered (live_cache.json): re-checked at most every 30 min while hours away, every 10 min
+    within 3 h, every 3 min around landing, and never again once the flight has landed or been cancelled.
+    "Refresh now" is limited to once per 2 minutes per flight.
   * A request counter (live_usage.json) enforces LIVE_MONTHLY_BUDGET (default 1000, 0 = unlimited).
-  * The plane's map position is requested only while the map is open, at most once a minute.
+  * No map positions are requested: the route diagram works from the departure and arrival times alone.
 
 How regional flights (SkyWest "OO"/SKW, Endeavor "9E"/EDV, Republic, Envoy, PSA ...) are found
   The flight is asked for under its IATA code (OO5131), its ICAO code (SKW5131) and, when the airport is known,
@@ -39,7 +41,6 @@ USAGE_FILE = "live_usage.json"
 # re-check intervals (seconds)
 TTL_FAR, TTL_MID, TTL_NEAR, TTL_OVERDUE, TTL_NODATA = 1800, 600, 180, 900, 1200
 FORCE_MIN = 120      # the "Refresh now" button works at most this often per flight
-POSITION_TTL = 60
 BOARD_TTL = 600
 DELAY_MIN = 5        # minutes of lateness before a flight is called "Delayed"
 
@@ -87,10 +88,6 @@ def _env_int(name, default):
         return int((os.environ.get(name) or "").strip())
     except ValueError:
         return default
-
-
-def window_hours():
-    return max(1, _env_int("LIVE_WINDOW_HOURS", 10))
 
 
 def monthly_budget():
@@ -150,7 +147,6 @@ def split_code(flight):
 _lock = threading.RLock()
 _key_locks = defaultdict(threading.Lock)
 _boards = {}      # (airline, airport) -> (fetched_ts, entries)   (memory only)
-_positions = {}   # ident -> (fetched_ts, position)
 
 
 def _read(path, default):
@@ -311,42 +307,16 @@ def _status(entry, sched_ts, est_ts):
     return "On Time", 0, False
 
 
-def _position(ident, fetch, now):
-    """Where the plane is right now, in the units the dashboard prints (feet, knots, degrees)."""
-    hit = _positions.get(ident)
-    if hit and now - hit[0] < POSITION_TTL:
-        return hit[1]
-    kind = "flight_icao" if re.match(r"^[A-Z]{3}\d", ident) else "flight_iata"
-    data = fetch("flight", **{kind: ident})
-    r = data.get("response") if isinstance(data, dict) else None
-    pos = None
-    if isinstance(r, dict):
-        try:
-            lat, lng = float(r["lat"]), float(r["lng"])
-
-            def num(v, factor=1.0):
-                try:
-                    return round(float(v) * factor)
-                except (TypeError, ValueError):
-                    return None
-
-            pos = {"latitude": lat, "longitude": lng,
-                   "altitude": num(r.get("alt"), 3.28084),   # AirLabs: metres -> feet
-                   "heading": num(r.get("dir")),             # degrees
-                   "speed": num(r.get("speed"), 0.539957)}   # AirLabs: km/h   -> knots
-        except (KeyError, TypeError, ValueError):
-            pos = None
-    _positions[ident] = (now, pos)
-    return pos
-
-
 # --------------------------------------------------------------------------- the lookup
 
 def _base(code):
     return {"flight": code, "configured": True, "status": "Not found", "delay_minutes": 0, "eta": None, "arrived": None,
-            "terminal": None, "gate": None, "baggage": None, "aircraft": None, "position": None, "detail": None,
-            "trackable": False, "checked_as": None, "tried": [], "cached": False, "age_s": 0, "early": False,
+            "terminal": None, "gate": None, "baggage": None, "aircraft": None, "detail": None, "route": None,
+            "checked_as": None, "tried": [], "cached": False, "age_s": 0, "not_today": False, "saved": False,
             "operator": None}
+
+
+SAVED_KEYS = ("status", "delay_minutes", "eta", "arrived", "terminal", "gate", "baggage", "aircraft", "operator", "checked_as", "route")
 
 
 def _plan(parsed, airport):
@@ -410,19 +380,33 @@ def _resolve(call, parsed, ride_ts, airport, known, now):
 def _finish(out, entry, ident):
     sched, est, act = _ts(entry, "arr_time"), _ts(entry, "arr_estimated"), _ts(entry, "arr_actual")
     status, delay, final = _status(entry, sched, est)
+    arrival = act or est or sched
+    dep = _ts(entry, "dep_actual") or _ts(entry, "dep_estimated") or _ts(entry, "dep_time")
+    duration = _int(entry.get("duration"))
+    if not dep and duration and arrival:
+        dep = arrival - duration * 60       # no departure time: work it back from the flight's duration
+    origin, dest = _text(entry.get("dep_iata")), _text(entry.get("arr_iata"))
     out.update(
         status=status, delay_minutes=delay, eta=_clock(entry.get("arr_estimated") or entry.get("arr_time")),
         arrived=_clock(entry.get("arr_actual")) if status == "Landed" else None,
         terminal=_text(entry.get("arr_terminal")), gate=_text(entry.get("arr_gate")),
-        baggage=_text(entry.get("arr_baggage")), aircraft=_text(entry.get("aircraft_icao")),
-        trackable=str(entry.get("status") or "").lower() == "active", checked_as=ident,
+        baggage=_text(entry.get("arr_baggage")), aircraft=_text(entry.get("aircraft_icao")), checked_as=ident,
         operator=airlines.name_of(entry.get("airline_iata") or entry.get("airline_icao")) or None,
+        route={"origin": origin.upper() if origin else None, "dest": dest.upper() if dest else None, "dep_ts": dep, "arr_ts": arrival}
+        if (origin or dest) else None,
     )
-    return final, act or est or sched
+    return final, arrival
 
 
-def lookup(flight, date=None, time_hhmm=None, airport=None, force=False, track=False, now=None, fetch=None):
-    """Live status for one flight. Always returns a dict, never raises."""
+def today_str(now=None):
+    """Today's date at the station (STATION_TZ), e.g. '2026-11-16'."""
+    from datetime import datetime
+    return datetime.fromtimestamp(time.time() if now is None else now, store.station_tz()).strftime("%Y-%m-%d")
+
+
+def lookup(flight, date=None, time_hhmm=None, airport=None, force=False, now=None, fetch=None):
+    """Live status for one flight. Always returns a dict, never raises.
+    The flight service is only asked for flights arriving today; other days get what was saved on the day."""
     now = time.time() if now is None else now
     raw_fetch = fetch or fetch_json
     code = clean_flight(flight)
@@ -430,6 +414,22 @@ def lookup(flight, date=None, time_hhmm=None, airport=None, force=False, track=F
     parsed = split_code(code)
     if not code or not parsed:
         out.update(status="Invalid flight", detail="That does not look like a flight number (example: OO 5131).")
+        return out
+    today = today_str(now)
+
+    # 1) not today: never ask the flight service. Show what was saved on the day, if anything.
+    if date and date != today:
+        out["not_today"] = True
+        out["usage"] = usage(now)
+        saved_day = store.saved_live(code, date)
+        if saved_day:
+            out.update({k: saved_day.get(k) for k in SAVED_KEYS if k in saved_day})
+            out.update(cached=True, saved=True, age_s=int(max(0, now - saved_day.get("saved_ts", now))),
+                       detail="Saved on the day of the flight. Live status is only requested for today's flights.")
+        else:
+            out.update(status="Scheduled" if date > today else "Past flight",
+                       detail="Live status is only requested for today's flights, so nothing was requested."
+                              + (" It is available on the day of the flight." if date > today else ""))
         return out
     if not api_key():
         out.update(configured=False, status="API key not set",
@@ -440,14 +440,6 @@ def lookup(flight, date=None, time_hhmm=None, airport=None, force=False, track=F
         airport = None
     ride_ts = store.local_epoch(date, time_hhmm or "12:00") if date else None
     out["usage"] = usage(now)
-
-    # 1) too early: AirLabs does not list the flight yet, so do not spend a request on it
-    window = window_hours() * 3600
-    if ride_ts and ride_ts - now > window:
-        out.update(status="Scheduled", early=True,
-                   detail=f"Live data opens about {window_hours()} hours before arrival "
-                          f"({_local_label(ride_ts - window)} station time). Nothing is requested before then.")
-        return out
 
     key = f"{code}|{date or ''}"
     with _key_locks[key]:
@@ -466,7 +458,7 @@ def lookup(flight, date=None, time_hhmm=None, airport=None, force=False, track=F
                 res = dict(saved["result"], cached=True, age_s=int(age), usage=out["usage"])
                 if too_soon:
                     res["detail"] = "Refreshed less than 2 minutes ago, so nothing new was requested."
-                return _with_position(res, saved, track, raw_fetch, now)
+                return res
 
         # 3) ask AirLabs (counted against the monthly budget)
         def call(endpoint, **params):
@@ -504,25 +496,9 @@ def lookup(flight, date=None, time_hhmm=None, airport=None, force=False, track=F
             cache[key] = {"fetched": now, "result": {k: v for k, v in out.items() if k not in ("usage", "cached", "age_s")},
                           "final": final, "ident": ident, "arr_ts": best}
             _save_cache(cache, now)
-        if best and ride_ts and best > ride_ts:
-            store.note_live_arrival(code, date, best)  # a late flight is not deleted before it has landed
-        return _with_position(out, {"ident": ident, "result": out}, track, raw_fetch, now)
-
-
-def _local_label(ts):
-    z = store.station_tz()
-    from datetime import datetime
-    return datetime.fromtimestamp(ts, z).strftime("%a %H:%M")
-
-
-def _with_position(res, saved, track, fetch, now):
-    """Adds the plane's position, but only when the map asks for it and the plane is in the air."""
-    if track and res.get("trackable") and saved.get("ident"):
-        try:
-            def call(endpoint, **params):
-                _spend(now)
-                return fetch(endpoint, **params)
-            res["position"] = _position(saved["ident"], call, now)
-        except LiveError:
-            pass  # the status is still useful without a map position
-    return res
+        if entry is not None and date:
+            summary = {k: out[k] for k in SAVED_KEYS}
+            summary["saved_ts"] = int(now)
+            # saved on the ride: shown on other days for free; a later arrival also protects the ride from the optional clean-up
+            store.note_live(code, date, summary, best if best and ride_ts and best > ride_ts else None)
+        return out

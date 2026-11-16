@@ -13,7 +13,6 @@
     <link rel="icon" type="image/png" href="/app/img/favicon.png">
     <link rel="stylesheet" href="/app/Style.css">
     <link href="https://fonts.googleapis.com/css2?family=Montserrat:wght@400;500;600;700&display=swap" rel="stylesheet">
-    <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" />
 </head>
 <body>
 
@@ -67,13 +66,11 @@
                 <div class="table-wrap" id="data-panel"><table class="grid" id="grid"><thead></thead><tbody></tbody></table></div>
                 <div class="foot"><span id="foot"></span><span class="store-chip" id="store-chip"></span></div>
             </section>
+            <section class="card route-card" id="route-card" aria-label="Flight route"></section>
 
             <aside class="side" id="side">
                 <section class="card dcard" id="detail-card" aria-live="polite"></section>
-                <section class="card map-card">
-                    <div id="map"></div>
-                    <div class="map-hint" id="map-hint"></div>
-                </section>
+                <section class="card wx-card" id="wx-card" aria-label="Airport weather" aria-live="polite"></section>
             </aside>
         </div>
     </main>
@@ -122,7 +119,8 @@
     <div id="toast" role="status"></div>
 
     <script src="/app/fx.js"></script>
-    <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
+    <script src="/app/world.js"></script>
+    <script src="/app/route.js"></script>
     <script src="/app/script.js"></script>
 </body>
 </html>

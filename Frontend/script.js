@@ -1,11 +1,6 @@
 const API_BASE = "";
 const TOKEN_KEY = 'ridecentric_token';
 const THEME_KEY = 'rc-theme';
-const DEFAULT_VIEW = { center: [32.8998, -97.0403], zoom: 10 }; // Dallas / DFW area
-const TILE_URLS = {
-    light: 'https://{s}.basemaps.cartocdn.com/light_all/{z}/{x}/{y}{r}.png',
-    dark: 'https://{s}.basemaps.cartocdn.com/dark_all/{z}/{x}/{y}{r}.png'
-};
 
 // Airline names by 2-letter code (used for the Airline column). Add more as needed.
 const AIRLINES = {
@@ -24,8 +19,6 @@ const AIRLINES = {
     AV: 'Avianca', LA: 'LATAM Airlines', CM: 'Copa Airlines'
 };
 
-let map = null;
-let tileLayer = null;
 let rides = [];          // flights currently loaded from the API (normalized)
 let selectedId = null;   // id of the flight shown in the details card
 const S = { date: 'ALL', q: '', status: null, sort: { k: 'when', dir: 1 }, auto: true };
@@ -156,7 +149,7 @@ document.addEventListener("DOMContentLoaded", () => {
     initStation();
     initUser();
     initClock();
-    initMap();
+    RouteView.init();
     setupEventListeners();
     setupExtras();
     renderDetail();
@@ -177,6 +170,7 @@ function initClock() {
         const p = stationParts(Date.now());
         el.innerText = `${pad(p.h % 12 || 12)}:${pad(p.mi)}:${pad(p.s)} ${p.h < 12 ? 'AM' : 'PM'}`;
         tickNext();
+        if (window.RouteView) RouteView.tick();      // the plane on the route diagram moves with the clock
         if (p.s % 30 === 0) refreshClockDriven();
     };
     tick();
@@ -197,29 +191,10 @@ function setTheme(t) {
     document.documentElement.setAttribute('data-theme', t);
     $('theme-btn').innerHTML = t === 'dark' ? SUN : MOON;
     try { localStorage.setItem(THEME_KEY, t); } catch (e) { /* storage blocked */ }
-    if (tileLayer) tileLayer.setUrl(TILE_URLS[t]);
 }
 
 function initTheme() {
     $('theme-btn').innerHTML = currentTheme() === 'dark' ? SUN : MOON;
-}
-
-// ---------- map ----------
-
-function initMap() {
-    if (!$('map')) return;
-    if (typeof L === 'undefined') {
-        $('map-hint').textContent = 'The map could not be loaded. Check the internet connection and reload.';
-        return;
-    }
-    map = L.map('map').setView(DEFAULT_VIEW.center, DEFAULT_VIEW.zoom);
-    tileLayer = L.tileLayer(TILE_URLS[currentTheme()], {
-        attribution: '© OpenStreetMap © CARTO',
-        subdomains: 'abcd',
-        maxZoom: 19
-    }).addTo(map);
-    $('map-hint').textContent = 'Select a flight, then press “Track on map” to follow it.';
-    if (window.ResizeObserver) new ResizeObserver(() => map.invalidateSize()).observe($('map'));
 }
 
 // ---------- events ----------
@@ -342,13 +317,9 @@ function setupEventListeners() {
             renderDetail();
             fetchLiveFlightData(r, true).then((data) => {
                 if (req !== liveReq) return;
-                live = { id: r.id, loading: false, data: data || { status: 'API unavailable', map_url: null } };
+                live = { id: r.id, loading: false, data: data || { status: 'API unavailable' } };
                 renderDetail();
             });
-        }
-        else if (id === 'd-track') {
-            const r = getRide(selectedId);
-            if (r) startFlightTracking(r, live.id === r.id ? live.data : null);
         }
     });
 }
@@ -517,6 +488,7 @@ async function loadStatus() {
         sysStatus = null;
     }
     renderStoreChip();
+    if (!selectedId) renderDetail();     // the card shows the station airport until a flight is picked
 }
 
 function renderStoreChip() {
@@ -525,15 +497,17 @@ function renderStoreChip() {
     const s = sysStatus;
     if (!s) { el.textContent = ''; return; }
     const parts = [`📦 ${s.rides} ride${s.rides === 1 ? '' : 's'} stored`];
-    if (s.next_purge_ts) {
+    if (s.purge_after_minutes && s.next_purge_ts) {
         const p = stationParts(s.next_purge_ts * 1000);
         parts.push(`next auto-delete ${pad(p.h)}:${pad(p.mi)}`);
     }
     const u = s.live || {};
     if (u.configured) parts.push(`✈ API ${u.calls}${u.budget ? '/' + u.budget : ''} this month`);
     el.textContent = parts.join(' · ');
-    el.title = `Rides are kept for the whole month and deleted ${s.purge_after_minutes} minutes after their arrival. ` +
-        `The flight API is only asked when you open a flight whose live data is due.`;
+    el.title = (s.purge_after_minutes
+        ? `Rides are kept for the whole month and deleted ${s.purge_after_minutes} minutes after their arrival. `
+        : 'Rides are kept: nothing is deleted automatically. ') +
+        'The flight API is only asked about flights arriving today, and only when you open the flight.';
 }
 
 function scanMessage(r) {
@@ -652,13 +626,13 @@ function showFlightDetails(ride) {
     liveTimer = setTimeout(() => fetchLiveFlightData(ride)
         .then((data) => {
             if (req !== liveReq) return; // another flight was selected meanwhile
-            live = { id: ride.id, loading: false, data: data || { status: 'API unavailable', map_url: null } };
+            live = { id: ride.id, loading: false, data: data || { status: 'API unavailable' } };
             renderDetail();
         })
         .catch((error) => {
             console.error('Error fetching live flight data:', error);
             if (req !== liveReq) return;
-            live = { id: ride.id, loading: false, data: { status: 'Error loading status', map_url: null } };
+            live = { id: ride.id, loading: false, data: { status: 'Error loading status' } };
             renderDetail();
         }), 250);
 }
@@ -688,6 +662,7 @@ function renderDetail() {
     const r = selectedId ? getRide(selectedId) : null;
     if (!r) {
         c.innerHTML = '<div class="dtitle">Flight details</div><div class="placeholder"><span class="big">✈️</span>Select a flight from the list<br>to see its details and live status.</div>';
+        showRoute(null);
         return;
     }
     const ld = (live.id === r.id && live.data) || {};   // live data for this flight (may be empty)
@@ -696,8 +671,7 @@ function renderDetail() {
         liveHtml = '<span class="muted">Loading…</span>';
     } else if (live.id === r.id && live.data) {
         const d = live.data;
-        liveHtml = `<span class="pill ${liveClass(d.status)}">${esc(d.status || 'Unknown')}</span>` +
-            (d.map_url ? '<button type="button" class="tbtn" id="d-track">🗺️ Track on map</button>' : '<span class="muted">Map not available</span>');
+        liveHtml = `<span class="pill ${liveClass(d.status)}">${esc(d.status || 'Unknown')}</span>`;
     } else {
         liveHtml = '<span class="muted">—</span>';
     }
@@ -705,14 +679,15 @@ function renderDetail() {
     if (live.id === r.id && live.data && !live.loading) {
         if (ld.checked_as) meta.push('Checked as ' + ld.checked_as);
         if (ld.operator) meta.push('Operated by ' + ld.operator);
-        if (ld.cached) meta.push('saved copy from ' + (ld.age_s >= 90 ? Math.round(ld.age_s / 60) + ' min' : 'moments') + ' ago');
-        else if (ld.configured !== false && !ld.early && ld.status !== 'API Error') meta.push('checked just now');
+        if (ld.saved) meta.push('saved on the day of the flight');
+        else if (ld.cached) meta.push('saved copy from ' + (ld.age_s >= 90 ? Math.round(ld.age_s / 60) + ' min' : 'moments') + ' ago');
+        else if (ld.configured !== false && !ld.not_today && ld.status !== 'API Error') meta.push('checked just now');
     }
-    const canRefresh = live.id === r.id && live.data && !live.loading && ld.configured !== false && !ld.early && ld.status !== 'API Error' &&
+    const canRefresh = live.id === r.id && live.data && !live.loading && ld.configured !== false && !ld.not_today && ld.status !== 'API Error' &&
         !/^(landed|cancelled)/i.test(ld.status || '');
     const removeAt = (() => {
-        if (!r.whenTs) return '';
-        const mins = (sysStatus && sysStatus.purge_after_minutes) || 60;
+        const mins = sysStatus && sysStatus.purge_after_minutes;       // 0 = nothing is deleted automatically
+        if (!r.whenTs || !mins) return '';
         const p = stationParts(r.whenTs + mins * 60000), d = `${p.y}-${pad(p.m)}-${pad(p.d)}`;
         return `${d === r.date ? '' : d + ' '}${pad(p.h)}:${pad(p.mi)}`;
     })();
@@ -733,6 +708,21 @@ function renderDetail() {
         `<div class="apistate"><span class="muted">Live status</span>${liveHtml}</div>` +
         (meta.length ? `<div class="apimeta">${esc(meta.join(' · '))}${canRefresh ? ' <button type="button" class="tbtn" id="d-refresh">↻ Refresh now</button>' : ''}</div>` : '') +
         (ld.detail ? `<div class="apihint">${esc(ld.detail)}</div>` : '');
+    showRoute(r);
+}
+
+// The airport the weather card and the map show when nothing is selected: STATION_AIRPORT, else the most common airport in the list.
+function defaultAirport() {
+    if (sysStatus && sysStatus.station_airport) return sysStatus.station_airport;
+    const n = {};
+    rides.forEach((r) => { if (r.airport) n[r.airport] = (n[r.airport] || 0) + 1; });
+    const top = Object.keys(n).sort((a, b) => n[b] - n[a])[0];
+    return top || null;
+}
+
+// Hands the selected flight (and what the flight API said about it) to the route diagram and the weather card.
+function showRoute(r) {
+    if (window.RouteView) RouteView.update(r, r ? live : null, defaultAirport());
 }
 
 // =============================================================================
@@ -748,230 +738,16 @@ function livePath(ride, extra) {
     return `/api/live?${q.join('&')}${extra || ''}`;
 }
 
-// force = the "Refresh now" button (the server still keeps its 2-minute minimum between requests)
+// force = the "Refresh now" button (the server still keeps its 2-minute minimum between requests).
+// The server only asks the flight service about flights arriving today; other days come back as a saved copy or "Scheduled".
 async function fetchLiveFlightData(ride, force) {
     try {
-        const data = await apiFetch(livePath(ride, force ? '&force=1' : ''));
-        // map_url is the same backend call plus track=1: only then does the server fetch the plane's position
-        return Object.assign({}, data, { map_url: data.trackable || data.position ? livePath(ride, '&track=1') : null });
+        return await apiFetch(livePath(ride, force ? '&force=1' : ''));
     } catch (error) {
         if (!error.auth) console.error('Live status error:', error);
-        return { status: 'API Error', detail: error.message, map_url: null };
+        return { status: 'API Error', detail: error.message };
     } finally {
         if (!force) setTimeout(loadStatus, 0); else loadStatus();
-    }
-}
-
-// =============================================================================
-// LIVE FLIGHT TRACKING ON DASHBOARD MAP
-// =============================================================================
-
-// Global variables for flight tracking
-let currentFlightMarker = null;
-let currentFlightPath = null;
-let flightTrackingInterval = null;
-
-// Start live flight tracking on the dashboard map
-async function startFlightTracking(ride, flightData) {
-    try {
-        if (!map) {
-            toast('The map is not available', 'warn');
-            return;
-        }
-
-        // Clear any existing flight tracking
-        clearFlightTracking(false);
-
-        // Fetch initial flight data (re-use what the details card already loaded)
-        flightData = flightData || await fetchLiveFlightData(ride);
-
-        if (!flightData || !flightData.map_url) {
-            toast('Flight tracking data not available', 'warn');
-            return;
-        }
-
-        // map_url is the backend's /api/live call, which includes the plane's position while it is airborne
-        const trackingData = await apiFetch(flightData.map_url);
-
-        // Extract flight position (adjust based on your API response structure)
-        const flightPosition = extractFlightPosition(trackingData);
-
-        if (flightPosition) {
-            // Add flight marker to map
-            addFlightMarkerToMap(flightPosition, ride);
-
-            // Optionally add flight path if available
-            if (trackingData.flightPath || trackingData.path) {
-                addFlightPathToMap(trackingData.flightPath || trackingData.path);
-            }
-
-            // Center map on flight
-            map.setView([flightPosition.lat, flightPosition.lng], 8);
-
-            // Start periodic updates (every 30 seconds)
-            flightTrackingInterval = setInterval(async () => {
-                try {
-                    const updatedData = await apiFetch(flightData.map_url);
-                    const newPosition = extractFlightPosition(updatedData);
-                    if (newPosition) {
-                        updateFlightMarker(newPosition, ride);
-                    }
-                } catch (error) {
-                    console.error('Error updating flight position:', error);
-                }
-            }, 30000);
-
-            // Show tracking info panel
-            showTrackingInfoPanel(ride, flightData);
-        } else {
-            toast('Unable to locate flight position', 'warn');
-        }
-
-    } catch (error) {
-        console.error('Error starting flight tracking:', error);
-        toast('Error loading flight tracking: ' + error.message, 'err');
-    }
-}
-
-// Extract flight position from API response (customize based on your API)
-function extractFlightPosition(trackingData) {
-    // Adjust these paths based on your airline API response structure
-    // Common patterns:
-    if (trackingData.position) {
-        return {
-            lat: trackingData.position.latitude || trackingData.position.lat,
-            lng: trackingData.position.longitude || trackingData.position.lng,
-            altitude: trackingData.position.altitude,
-            heading: trackingData.position.heading,
-            speed: trackingData.position.speed
-        };
-    }
-
-    if (trackingData.latitude && trackingData.longitude) {
-        return {
-            lat: trackingData.latitude,
-            lng: trackingData.longitude,
-            altitude: trackingData.altitude,
-            heading: trackingData.heading,
-            speed: trackingData.speed
-        };
-    }
-
-    // If the API returns an array of positions, use the latest one
-    if (Array.isArray(trackingData) && trackingData.length > 0) {
-        const latest = trackingData[trackingData.length - 1];
-        return {
-            lat: latest.lat || latest.latitude,
-            lng: latest.lng || latest.longitude,
-            altitude: latest.altitude,
-            heading: latest.heading,
-            speed: latest.speed
-        };
-    }
-
-    return null;
-}
-
-// Plane icon, rotated to the flight's heading
-function planeIcon(heading) {
-    return L.divIcon({
-        html: `<svg class="plane-ico" viewBox="-14 -14 28 28" style="transform:rotate(${Number(heading) || 0}deg)"><path d="M0,-12 L3,-4 L12,2 L12,5 L3,3 L2,9 L5,11 L5,13 L0,12 L-5,13 L-5,11 L-2,9 L-3,3 L-12,5 L-12,2 L-3,-4 Z"/></svg>`,
-        className: 'flight-plane-icon',
-        iconSize: [30, 30],
-        iconAnchor: [15, 15]
-    });
-}
-
-function popupHtml(position, ride) {
-    return `<div style="font-family: 'Montserrat', sans-serif; text-align: center;">
-        <strong>${esc(ride.flight)}</strong><br>
-        Alt: ${esc(position.altitude || 'N/A')} ft<br>
-        Speed: ${esc(position.speed || 'N/A')} kts<br>
-        Heading: ${esc(position.heading || 'N/A')}°
-    </div>`;
-}
-
-// Add flight marker to map
-function addFlightMarkerToMap(position, ride) {
-    currentFlightMarker = L.marker([position.lat, position.lng], {
-        icon: planeIcon(position.heading)
-    }).addTo(map);
-
-    // Add popup with flight info
-    currentFlightMarker.bindPopup(popupHtml(position, ride)).openPopup();
-}
-
-// Add flight path to map
-function addFlightPathToMap(pathData) {
-    if (!pathData || !Array.isArray(pathData)) return;
-
-    const pathCoords = pathData.map(point => [point.lat || point.latitude, point.lng || point.longitude]);
-
-    currentFlightPath = L.polyline(pathCoords, {
-        color: '#1fa64a',
-        weight: 3,
-        opacity: 0.85
-    }).addTo(map);
-}
-
-// Update flight marker position
-function updateFlightMarker(newPosition, ride) {
-    if (currentFlightMarker) {
-        currentFlightMarker.setLatLng([newPosition.lat, newPosition.lng]);
-        currentFlightMarker.setIcon(planeIcon(newPosition.heading));
-
-        // Update popup content
-        currentFlightMarker.setPopupContent(popupHtml(newPosition, ride));
-    }
-
-    // Update path if new segment available
-    if (currentFlightPath && newPosition.path) {
-        // Add new point to path
-        const newCoords = [newPosition.lat, newPosition.lng];
-        currentFlightPath.addLatLng(newCoords);
-    }
-}
-
-// Show tracking info panel
-function showTrackingInfoPanel(ride, flightData) {
-    const host = $('map').parentElement;
-    let panel = $('flight-tracking-panel');
-    if (!panel) {
-        panel = document.createElement('div');
-        panel.id = 'flight-tracking-panel';
-        panel.className = 'track-panel';
-        host.appendChild(panel);
-    }
-    panel.innerHTML = `
-        <button type="button" class="x" id="clear-tracking-btn" aria-label="Stop tracking">&times;</button>
-        <strong>${esc(ride.flight)}</strong>
-        <div class="meta">${esc(ride.date)} • ${esc(flightData.status || 'Tracking')}<br>Updates every 30 seconds</div>`;
-    panel.style.display = 'block';
-    $('clear-tracking-btn').addEventListener('click', () => clearFlightTracking());
-    $('map-hint').textContent = `Following ${ride.flight}.`;
-}
-
-// Clear flight tracking (resetView=false when a new tracking session is about to start)
-function clearFlightTracking(resetView = true) {
-    if (map && currentFlightMarker) map.removeLayer(currentFlightMarker);
-    currentFlightMarker = null;
-
-    if (map && currentFlightPath) map.removeLayer(currentFlightPath);
-    currentFlightPath = null;
-
-    if (flightTrackingInterval) {
-        clearInterval(flightTrackingInterval);
-        flightTrackingInterval = null;
-    }
-
-    // Remove tracking info panel if it exists
-    const trackingPanel = $('flight-tracking-panel');
-    if (trackingPanel) trackingPanel.remove();
-
-    if (map && resetView) {
-        // Reset map view to default (Dallas area)
-        map.setView(DEFAULT_VIEW.center, DEFAULT_VIEW.zoom);
-        $('map-hint').textContent = 'Select a flight, then press “Track on map” to follow it.';
     }
 }
 
@@ -993,7 +769,7 @@ const STATIONS = [
     { id: 'UTC', label: 'UTC' },
     { id: '', label: 'This computer' }
 ];
-let stationTz = 'America/Chicago';   // the map starts on Dallas, so Dallas time is the default
+let stationTz = 'America/Chicago';   // Dallas time is the default
 const _dtf = {};
 
 function dtf(tz) {

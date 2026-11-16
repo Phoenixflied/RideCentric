@@ -1,12 +1,12 @@
-"""The ride store: keeps a whole month of manifests and removes each ride by itself once it is over.
+"""The ride store: keeps a whole month of manifests.
 
-* Rides live in database.json (same list-of-dicts format the dashboard has always used).
+* Rides live in database.json (same list-of-dicts format the dashboard has always used) and are KEPT.
 * Manifest PDFs are read once. A "ledger" (manifest_ledger.json) remembers which files were already loaded,
   so uploading or dropping the same PDF again never creates duplicates.
-* Every ride is deleted PURGE_AFTER_MINUTES (default 60) after its arrival. If the flight service reported a
-  later arrival (a delayed flight), the clean-up waits for that one instead.
-* A background thread does the clean-up every minute and picks up new PDFs dropped in the manifests/ folder.
-  The clean-up also runs whenever the dashboard asks for the list, so it is right even if the thread is not running.
+* What the flight service said about a flight (status, route, times) is saved on its ride, so it can still be
+  shown on other days, when the flight service is not asked.
+* Optional: PURGE_AFTER_MINUTES=60 in .env deletes each ride that many minutes after its arrival (default 0 = never delete).
+* A background thread picks up new PDFs dropped in the manifests/ folder (and does the optional clean-up).
 
 Standard library only (the PDF reading itself is in manifest.py). Times in the manifests are local time at the
 station; STATION_TZ (default America/Chicago, i.e. Dallas) says which time zone that is.
@@ -40,7 +40,8 @@ def _env_int(name, default, lo=0, hi=10 ** 6):
 
 
 def purge_after_minutes():
-    return _env_int("PURGE_AFTER_MINUTES", 60)
+    """0 (the default) = rides are never deleted."""
+    return _env_int("PURGE_AFTER_MINUTES", 0)
 
 
 def station_tzname():
@@ -108,7 +109,9 @@ def load_ledger():
 # --------------------------------------------------------------------------- purge
 
 def due_ts(ride, tz=None):
-    """When this ride should be removed (Unix seconds), or None if it has no usable date."""
+    """When this ride should be removed (Unix seconds), or None if rides are kept or it has no usable date."""
+    if not purge_after_minutes():
+        return None
     arrival = local_epoch(ride.get("date"), ride.get("arrival_time") or "23:59", tz)
     if arrival is None:  # no readable time (e.g. "TBD"): count from the end of that day
         arrival = local_epoch(ride.get("date"), "23:59", tz)
@@ -121,8 +124,10 @@ def due_ts(ride, tz=None):
 
 
 def purge(now=None):
-    """Deletes every ride whose time has come. Returns how many were removed."""
+    """Deletes every ride whose time has come (only when PURGE_AFTER_MINUTES is set). Returns how many were removed."""
     global _last_purge_check
+    if not purge_after_minutes():
+        return 0
     now = time.time() if now is None else now
     tz = station_tz()
     with _lock:
@@ -250,22 +255,37 @@ def scan_folder(now=None):
     return summary
 
 
-# --------------------------------------------------------------------------- live arrival note
+# --------------------------------------------------------------------------- what the flight service said
 
-def note_live_arrival(flight_key, date, arrival_ts):
-    """The flight service gave a later arrival for this flight: remember it so the ride is not deleted too early."""
-    if not arrival_ts:
-        return
+def _key(flight):
+    return "".join(str(flight or "").upper().split())
+
+
+def note_live(flight_key, date, summary, arrival_ts=None):
+    """Saves the flight service's answer on every ride of that flight and date (so it can be shown without asking again),
+    and remembers a later arrival so the optional clean-up does not delete a late flight too early."""
     with _lock:
         db = load_db()
         changed = False
         for r in db:
-            if isinstance(r, dict) and r.get("date") == date and "".join(str(r.get("flight", "")).upper().split()) == flight_key:
-                if r.get("live_arrival_ts") != int(arrival_ts):
+            if isinstance(r, dict) and r.get("date") == date and _key(r.get("flight")) == flight_key:
+                if summary and r.get("live") != summary:
+                    r["live"] = summary
+                    changed = True
+                if arrival_ts and r.get("live_arrival_ts") != int(arrival_ts):
                     r["live_arrival_ts"] = int(arrival_ts)
                     changed = True
         if changed:
             save_db(db)
+
+
+def saved_live(flight_key, date):
+    """The answer saved by note_live() for this flight and date, or None."""
+    with _lock:
+        for r in load_db():
+            if isinstance(r, dict) and r.get("date") == date and _key(r.get("flight")) == flight_key and isinstance(r.get("live"), dict):
+                return r["live"]
+    return None
 
 
 # --------------------------------------------------------------------------- summary + background thread

@@ -15,8 +15,10 @@ sys.path.insert(0, BASE_DIR)
 
 import live  # noqa: E402  (live flight lookup; reads FLIGHT_API_KEY from .env)
 live.load_env(os.path.join(BASE_DIR, ".env"))
+import airports  # noqa: E402  (airport names and coordinates)
 import manifest  # noqa: E402  (reads the RideCentric manifest PDFs)
-import store  # noqa: E402  (keeps the month of rides and deletes each one 1 hour after arrival)
+import store  # noqa: E402  (keeps the month of rides)
+import weather  # noqa: E402  (airport weather for the weather card)
 
 app = FastAPI(title="RideCentric Dispatch API")
 
@@ -147,19 +149,38 @@ def _flag(value) -> bool:
 
 @app.get('/api/live')
 def live_flight(flight: str, date: Optional[str] = None, time: Optional[str] = None, airport: Optional[str] = None,
-                force: Optional[str] = None, track: Optional[str] = None, token: Optional[str] = Query(None)):
+                force: Optional[str] = None, token: Optional[str] = Query(None)):
     """Live status of one flight. Looked up here so the airline API key never reaches the browser.
-    Answers come from the saved copy when it is still fresh, so the API is only used when it is needed.
+    The flight service is only asked for flights arriving today, and only when somebody opens the flight: other days get
+    what was saved on the day. Answers come from the saved copy while it is still fresh.
     (A plain `def` on purpose: FastAPI runs it in a worker thread, so the web request to AirLabs does not block the server.)"""
     require_token(token)
-    return live.lookup(flight, date, time, airport, force=_flag(force), track=_flag(track))
+    return live.lookup(flight, date, time, airport, force=_flag(force))
+
+@app.get('/api/airports')
+def airport_list(token: Optional[str] = Query(None)):
+    """Names and coordinates of the airports the route diagram can draw."""
+    require_token(token)
+    return airports.all_airports()
+
+@app.get('/api/weather')
+def airport_weather(airport: str, at: Optional[str] = None, token: Optional[str] = Query(None)):
+    """Weather at an airport now and (if `at`, a Unix time, is given) at the hour a flight lands. Free service, no key."""
+    require_token(token)
+    try:
+        when = int(float(at)) if at else None
+    except ValueError:
+        when = None
+    return weather.get(airport, when)
 
 @app.get('/api/status')
 def system_status(token: Optional[str] = Query(None)):
-    """Numbers for the dashboard's storage chip: rides kept, next automatic delete, API requests used this month."""
+    """Numbers for the dashboard's storage chip: rides kept and API requests used this month."""
     require_token(token)
     out = store.summary()
-    out["live"] = dict(live.usage(), configured=bool(live.api_key()), window_hours=live.window_hours())
+    out["live"] = dict(live.usage(), configured=bool(live.api_key()), rule="today", today=live.today_str())
+    code = (os.environ.get("STATION_AIRPORT") or "").strip().upper()[:3]
+    out["station_airport"] = code if airports.get(code) else None   # the airport the weather card shows when no flight is selected
     return out
 
 @app.post('/api/add_manual')
