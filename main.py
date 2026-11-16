@@ -5,6 +5,7 @@ import sys
 from datetime import datetime
 from fastapi import FastAPI, HTTPException, Query, Request
 from fastapi.middleware.cors import CORSMiddleware
+from starlette.middleware.gzip import GZipMiddleware
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
 from typing import List, Optional
@@ -33,6 +34,8 @@ app.add_middleware(
     allow_methods=["*"],
     allow_headers=["*"],
 )
+# Pages, scripts and the flight list shrink to about a quarter of their size on the wire
+app.add_middleware(GZipMiddleware, minimum_size=1024)
 
 USERS_FILE = 'users.json'
 

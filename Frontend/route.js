@@ -30,7 +30,7 @@
     let model = null;                    // what the card currently shows (see resolve())
     let scene = null;                    // the drawn geometry (see layout())
     let inputs = { ride: null, live: null, def: null, stations: [] };
-    let W = 0, H = 0, layoutQueued = false, lastAngle = null, lastPaint = '';
+    let W = 0, H = 0, layoutQueued = false, lastAngle = null, lastPaint = '', lastHead = '', lastFoot = '';
     // the part of the world on screen: k = width factor of the projection, s = degrees per pixel, cx/cy = centre (projected degrees)
     let vp = null, fit = null, limits = null, fitKey = '', moved = false, follow = false, tween = 0, goal = null;   // goal = where a running zoom animation is heading
 
@@ -288,7 +288,7 @@
         }
         $('rt-dyn').innerHTML = h;
         scene = { arcPx, arcU, W, H };
-        lastAngle = null; lastPaint = '';
+        lastAngle = null; lastPaint = ''; lastHead = ''; lastFoot = '';
         updateCtl();
         paint(true);
     }
@@ -445,7 +445,10 @@
         const m = model, now = Date.now();
         const f = m.mode === 'route' ? progress(m, now) : 0;
         const state = m.cancelled ? 'cancelled' : m.landed ? 'landed' : m.mode === 'route' ? (now < m.depMs ? 'waiting' : 'air') : 'none';
-        wrap.dataset.mode = m.mode; wrap.dataset.state = state; wrap.dataset.progress = f.toFixed(4);
+        const ds = wrap.dataset, prog = f.toFixed(4);
+        if (ds.mode !== m.mode) ds.mode = m.mode;
+        if (ds.state !== state) ds.state = state;
+        if (ds.progress !== prog) ds.progress = prog;
 
         if (m.mode === 'route' && scene && scene.arcPx) {
             const pl = planeAt(f);
@@ -473,7 +476,8 @@
         const sig = [m.mode, m.rideId, m.status, m.arrMs, Math.floor(now / 1000), force ? 1 : 0].join('|');
         if (sig === lastPaint) return;
         lastPaint = sig;
-        paintHead(m);
+        const hsig = [m.mode, m.rideId, m.flight, m.estimated ? 1 : 0, m.from && m.from.code, m.to && m.to.code, m.note].join('|');
+        if (hsig !== lastHead) { lastHead = hsig; paintHead(m); }       // the header only changes with the flight, not every second
         paintFoot(m, f, now, state);
     }
 
@@ -484,10 +488,9 @@
         else if (m.mode === 'dest') left = `<b>${esc(m.flight)}</b><span class="rt-sub">arriving at ${esc(m.to.code)}</span>`;
         else left = '<b>Flight route</b>' + (m.to ? `<span class="rt-sub">${esc(m.to.code)}</span>` : '');
         const sub = m.mode === 'route'
-            ? (m.estimated ? 'Departure time estimated from the distance' : 'Position follows the clock · departure to arrival')
+            ? (m.estimated ? 'Departure time estimated from the distance' : 'Estimated position, departure to arrival')
             : '';
-        el.innerHTML = `<div class="rt-headl"><div class="rt-title">${left}</div>` + (sub ? `<div class="rt-note">${esc(sub)}</div>` : '') + '</div>' +
-            '<span class="rt-live" title="The plane moves with the clock. It is an estimate, not a GPS position."><i></i>moves with the clock</span>';
+        el.innerHTML = `<div class="rt-headl"><div class="rt-title">${left}</div>` + (sub ? `<div class="rt-note">${esc(sub)}</div>` : '') + '</div>';
         $('rt-hint').textContent = m.mode === 'route' ? '' : m.note;
         $('rt-hint').hidden = m.mode === 'route' || !m.note;
     }
@@ -496,13 +499,14 @@
 
     function paintFoot(m, f, now, state) {
         const el = $('rt-foot');
-        if (m.mode === 'idle') { el.innerHTML = ''; el.hidden = true; return; }
+        const put = (html) => { if (html !== lastFoot) { lastFoot = html; el.innerHTML = html; } };      // touch the page only when the text changed
+        if (m.mode === 'idle') { put(''); el.hidden = true; return; }
         el.hidden = false;
         const eta = m.arrMs ? clock(m.arrMs) : '';
         if (m.mode === 'dest') {
             const left = m.arrMs - now;
-            el.innerHTML = '<div class="rt-info">' + cell('Status', esc(m.status || '—')) + cell('Scheduled arrival', esc(eta || '—')) +
-                cell(left >= 0 ? 'Arrives in' : 'Was due', m.arrMs ? esc(dur(Math.abs(left))) + (left < 0 ? ' ago' : '') : '—') + '</div>';
+            put('<div class="rt-info">' + cell('Status', esc(m.status || '—')) + cell('Scheduled arrival', esc(eta || '—')) +
+                cell(left >= 0 ? 'Arrives in' : 'Was due', m.arrMs ? esc(dur(Math.abs(left))) + (left < 0 ? ' ago' : '') : '—') + '</div>');
             return;
         }
         const flown = m.km * f, total = m.km;
@@ -514,10 +518,12 @@
         else if (f > 0) status = 'In the air';
         const elapsed = state === 'waiting' || state === 'cancelled' ? '—' : dur((state === 'landed' ? m.arrMs : now) - m.depMs);
         const remain = state === 'landed' || state === 'cancelled' ? '—' : (m.arrMs - now > 0 ? dur(m.arrMs - now) : 'any moment');
-        el.innerHTML = `<div class="rt-bar"><i style="width:${(f * 100).toFixed(2)}%"></i></div><div class="rt-info">` +
+        put(`<div class="rt-bar"><i></i></div><div class="rt-info">` +
             cell('Status', esc(status), 'rt-st') + cell('Elapsed', esc(elapsed)) +
             cell('Remaining', esc(remain) + (eta && state !== 'landed' && state !== 'cancelled' ? `<small>ETA ${esc(eta)}</small>` : '')) +
-            cell('Distance', `${miles(flown)}<small>of ${miles(total)} mi</small>`) + '</div>';
+            cell('Distance', `${miles(flown)}<small>of ${miles(total)} mi</small>`) + '</div>');
+        const bar = el.querySelector('.rt-bar i');
+        if (bar) bar.style.width = (f * 100).toFixed(2) + '%';
     }
 
     // ---------------------------------------------------------------- weather card
