@@ -165,7 +165,7 @@ def system_status(token: Optional[str] = Query(None)):
 @app.post('/api/add_manual')
 async def add_manual(entry: FlightEntry, token: Optional[str] = Query(None)):
     require_token(token)
-    with store._lock:
+    with store.lock:
         db = load_db()
         # Check for duplicates
         if any(item.get('ride_no') == entry.ride_no and item.get('date') == entry.date for item in db):

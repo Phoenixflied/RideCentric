@@ -25,6 +25,7 @@ LEDGER_FILE = "manifest_ledger.json"
 MANIFEST_DIR = "manifests"
 
 _lock = threading.RLock()
+lock = _lock   # main.py uses this for its own read-modify-write
 _thread = None
 _last_purge_check = 0.0
 
@@ -270,11 +271,12 @@ def note_live_arrival(flight_key, date, arrival_ts):
 # --------------------------------------------------------------------------- summary + background thread
 
 def summary():
-    db = load_db()
+    with _lock:
+        db = load_db()
+        led = load_ledger()
     tz = station_tz()
     dues = [d for d in (due_ts(r, tz) for r in db if isinstance(r, dict)) if d is not None]
     dates = sorted(r.get("date") for r in db if isinstance(r, dict) and r.get("date"))
-    led = load_ledger()
     return {
         "rides": len(db),
         "first_date": dates[0] if dates else None,
