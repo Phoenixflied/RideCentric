@@ -1,6 +1,5 @@
 const API_BASE = "";
 const TOKEN_KEY = 'ridecentric_token';
-const THEME_KEY = 'rc-theme';
 
 // Airline names by 2-letter code (used for the Airline column). Add more as needed.
 const AIRLINES = {
@@ -145,7 +144,6 @@ function normalize(r) {
 
 document.addEventListener("DOMContentLoaded", () => {
     if (!requireAuth()) return;
-    initTheme();
     initStation();
     initUser();
     initClock();
@@ -178,24 +176,7 @@ function initClock() {
     setInterval(tick, 1000);
 }
 
-// ---------- theme ----------
-
-const SUN = '<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><circle cx="12" cy="12" r="4"/><path d="M12 2v2M12 20v2M4.9 4.9l1.4 1.4M17.7 17.7l1.4 1.4M2 12h2M20 12h2M4.9 19.1l1.4-1.4M17.7 6.3l1.4-1.4"/></svg>';
-const MOON = '<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 12.8A9 9 0 1 1 11.2 3a7 7 0 0 0 9.8 9.8z"/></svg>';
-
-function currentTheme() {
-    return document.documentElement.getAttribute('data-theme') === 'dark' ? 'dark' : 'light';
-}
-
-function setTheme(t) {
-    document.documentElement.setAttribute('data-theme', t);
-    $('theme-btn').innerHTML = t === 'dark' ? SUN : MOON;
-    try { localStorage.setItem(THEME_KEY, t); } catch (e) { /* storage blocked */ }
-}
-
-function initTheme() {
-    $('theme-btn').innerHTML = currentTheme() === 'dark' ? SUN : MOON;
-}
+// Bright / Dark mode and the time-of-day sky: see sky.js (RCSky)
 
 // ---------- events ----------
 
@@ -259,7 +240,7 @@ function setupEventListeners() {
     $('d-prev').addEventListener('click', () => setDateControls(addDays(S.date === 'ALL' ? dayOffset(0) : S.date, -1), true));
     $('d-next').addEventListener('click', () => setDateControls(addDays(S.date === 'ALL' ? dayOffset(0) : S.date, 1), true));
 
-    // Search, scan, auto-refresh, theme, logout
+    // Search, scan, auto-refresh, logout
     $('search-bar').addEventListener('input', () => { S.q = $('search-bar').value; render(); });
     $('scan-btn').addEventListener('click', forceScan);
     $('upload-btn').addEventListener('click', () => $('upload-input').click());
@@ -274,7 +255,6 @@ function setupEventListeners() {
         S.auto = $('auto').checked;
         toast(S.auto ? 'Auto-refresh on (every 30 seconds)' : 'Auto-refresh paused');
     });
-    $('theme-btn').addEventListener('click', () => setTheme(currentTheme() === 'dark' ? 'light' : 'dark'));
     $('logout-btn').addEventListener('click', logout);
 
     // Status chips
@@ -720,9 +700,18 @@ function defaultAirport() {
     return top || null;
 }
 
+// The airports where the flights in view land (most flights first, at most 6): the weather card shows each one.
+function stationList() {
+    const day = S.date === 'ALL' ? null : S.date, n = {};
+    rides.forEach((x) => { if (x.airport && (!day || x.date === day)) n[x.airport] = (n[x.airport] || 0) + 1; });
+    const def = defaultAirport();
+    if (def) n[def] = (n[def] || 0) + 0.5;                 // the station airport counts a little, so it is listed even on an empty day
+    return Object.keys(n).sort((a, b) => n[b] - n[a] || (a < b ? -1 : 1)).slice(0, 6);
+}
+
 // Hands the selected flight (and what the flight API said about it) to the route diagram and the weather card.
 function showRoute(r) {
-    if (window.RouteView) RouteView.update(r, r ? live : null, defaultAirport());
+    if (window.RouteView) RouteView.update(r, r ? live : null, defaultAirport(), stationList());
 }
 
 // =============================================================================
@@ -800,8 +789,10 @@ function initStation() {
     const sel = $('station');
     sel.innerHTML = STATIONS.map((x) => `<option value="${esc(x.id)}">${esc(x.label)}</option>`).join('');
     sel.value = stationTz;
+    if (window.RCSky) RCSky.setZone(stationTz);
     sel.addEventListener('change', () => {
         stationTz = sel.value;
+        if (window.RCSky) RCSky.setZone(stationTz);
         try { localStorage.setItem(STATION_KEY, stationTz); } catch (e) { /* storage blocked */ }
         rides = rides.map(normalize);          // flight moments depend on the zone
         if (window.updateClock) window.updateClock();
@@ -1032,7 +1023,8 @@ function setupExtras() {
             a: () => $('add-btn').click(),
             r: () => { fetchFlights(S.date); toast('Refreshed'); },
             e: exportCsv,
-            d: () => $('theme-btn').click()
+            d: () => $('theme-btn').click(),
+            s: () => $('sky-btn').click()
         }[k];
         if (act) { e.preventDefault(); act(); }
     });

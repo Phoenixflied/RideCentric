@@ -80,7 +80,8 @@ def _shape(iata, info, raw, fetched, at):
     cur = raw.get("current") or {}
     text, kind = describe(cur.get("weather_code"))
     out = {
-        "airport": iata, "name": info.get("name"), "updated": int(fetched), "error": None, "arrival": None,
+        "airport": iata, "name": info.get("name"), "city": info.get("city"), "updated": int(fetched), "error": None, "arrival": None,
+        "utc_offset": _num(raw.get("utc_offset_seconds")) or 0, "tz": raw.get("timezone_abbreviation") or None,   # the airport's own clock
         "current": {"temp": _num(cur.get("temperature_2m")), "feels": _num(cur.get("apparent_temperature")),
                     "humidity": _num(cur.get("relative_humidity_2m")), "wind": _num(cur.get("wind_speed_10m")),
                     "gust": _num(cur.get("wind_gusts_10m")), "dir": compass(cur.get("wind_direction_10m")),
